@@ -29,11 +29,26 @@ function nextDay(date) {
   return d.toISOString().slice(0, 10)
 }
 
+const PASS = process.env.CONSIED_PASSWORD || ''
+function authed(req, res) {
+  if (!PASS) return true // no password configured -> open
+  const h = req.headers.authorization || ''
+  const [scheme, enc] = h.split(' ')
+  if (scheme === 'Basic' && enc) {
+    const pw = Buffer.from(enc, 'base64').toString().split(':').slice(1).join(':')
+    if (pw === PASS) return true
+  }
+  res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Consied", charset="UTF-8"' })
+  res.end('Authentication required')
+  return false
+}
+
 function createServer({ dbFile, exercisesJson, distDir }) {
   db.initDb(dbFile)
   exercises.loadExercises(exercisesJson)
   return http.createServer(async (req, res) => {
     try {
+      if (!authed(req, res)) return
       const u = new URL(req.url, 'http://127.0.0.1')
       const p = u.pathname
       const m = req.method
@@ -71,6 +86,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       }
 
       if (p.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' })
+      if (p.startsWith('/media/')) return serveStatic(res, path.join(__dirname, '..', 'media'), p.slice('/media'.length))
       return serveStatic(res, distDir, p)
     } catch (e) {
       sendJson(res, 500, { error: e.message })
