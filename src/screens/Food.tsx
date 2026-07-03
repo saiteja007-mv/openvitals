@@ -295,10 +295,14 @@ function LookupTab({ show }: { show: (m: string) => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const scanControlsRef = useRef<IScannerControls | null>(null)
+  const nativeRafRef = useRef<number | null>(null)
+  const handledRef = useRef(false)
 
   const stopScan = () => {
     scanControlsRef.current?.stop()
     scanControlsRef.current = null
+    if (nativeRafRef.current != null) cancelAnimationFrame(nativeRafRef.current)
+    nativeRafRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     if (videoRef.current) videoRef.current.srcObject = null
@@ -317,13 +321,43 @@ function LookupTab({ show }: { show: (m: string) => void }) {
   const lookup = () => lookupCode(barcode)
 
   const handleScannedCode = async (code: string) => {
+    if (handledRef.current) return
+    handledRef.current = true
     setBarcode(code)
     stopScan()
-    await lookupCode(code)
+    setScanMsg('')
     show(`Scanned barcode ${code}`)
+    try {
+      await lookupCode(code)
+    } catch {
+      setScanMsg('Scanned the code but the product lookup failed — check the connection and press Look up.')
+    }
   }
 
-  const startZxingScan = async (constraints: MediaStreamConstraints) => {
+  const cameraErrorMessage = (e: unknown) => {
+    const name = e instanceof DOMException ? e.name : ''
+    if (name === 'NotAllowedError' || name === 'SecurityError')
+      return 'Camera permission was denied. Allow camera access for this site and try again, or enter the code manually.'
+    if (name === 'NotFoundError' || name === 'OverconstrainedError')
+      return 'No usable camera was found on this device. Enter the code manually.'
+    if (name === 'NotReadableError' || name === 'AbortError')
+      return 'The camera is busy or unavailable (maybe another app is using it). Close it and try again.'
+    return `Could not start the camera${name ? ` (${name})` : ''}. Enter the code manually.`
+  }
+
+  const waitForVideoSize = (video: HTMLVideoElement, timeoutMs: number) =>
+    new Promise<boolean>((resolve) => {
+      const started = Date.now()
+      const check = () => {
+        if (!streamRef.current) return resolve(false)
+        if (video.videoWidth > 0 && video.videoHeight > 0) return resolve(true)
+        if (Date.now() - started > timeoutMs) return resolve(false)
+        requestAnimationFrame(check)
+      }
+      check()
+    })
+
+  const startZxingLoop = (video: HTMLVideoElement) => {
     const hints = new Map<DecodeHintType, unknown>()
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
       BarcodeFormat.EAN_13,
@@ -335,41 +369,55 @@ function LookupTab({ show }: { show: (m: string) => void }) {
     ])
     hints.set(DecodeHintType.TRY_HARDER, true)
     const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 })
-    let handled = false
-    const controls = await reader.decodeFromConstraints(constraints, videoRef.current ?? undefined, async (result) => {
-      const code = result?.getText()
-      if (!code || handled) return
-      handled = true
-      await handleScannedCode(code)
-    })
-    scanControlsRef.current = controls
-    setScanMsg('Point the camera at a barcode. Hold it steady and fill the frame with the bars.')
+    let restarts = 0
+    const begin = () => {
+      if (!streamRef.current) return
+      scanControlsRef.current = reader.scan(
+        video,
+        (result) => {
+          const code = result?.getText()
+          if (code) void handleScannedCode(code)
+        },
+        (error) => {
+          // ZXing's decode loop dies permanently on any unexpected per-frame
+          // error (e.g. a 0-sized frame while the camera warms up). Restart it
+          // while the stream is alive instead of scanning nothing forever.
+          scanControlsRef.current = null
+          if (error && streamRef.current && restarts < 20) {
+            restarts++
+            setTimeout(begin, 250)
+          }
+        },
+      )
+    }
+    begin()
   }
 
-  const startNativeBarcodeScan = async (constraints: MediaStreamConstraints) => {
-    if (!window.BarcodeDetector) throw new Error('native barcode detector unavailable')
-    const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'] })
-    const stream = await navigator.mediaDevices.getUserMedia(constraints)
-    streamRef.current = stream
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream
-      await videoRef.current.play()
+  const startNativeLoop = (video: HTMLVideoElement) => {
+    // Android Chrome's ML-based detector handles blur and small codes far
+    // better than ZXing; run it in parallel and let the first hit win.
+    if (!window.BarcodeDetector) return
+    let detector: BarcodeDetectorShape
+    try {
+      detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'] })
+    } catch {
+      return
     }
     const tick = async () => {
-      if (!streamRef.current || !videoRef.current) return
+      if (!streamRef.current) return
       try {
-        const found = await detector.detect(videoRef.current)
+        const found = await detector.detect(video)
         const code = found[0]?.rawValue
         if (code) {
-          await handleScannedCode(code)
+          void handleScannedCode(code)
           return
         }
       } catch {
         // Native detection can fail per-frame; keep trying while the stream is alive.
       }
-      requestAnimationFrame(tick)
+      nativeRafRef.current = requestAnimationFrame(tick)
     }
-    requestAnimationFrame(tick)
+    nativeRafRef.current = requestAnimationFrame(tick)
   }
 
   const startScan = async () => {
@@ -382,34 +430,47 @@ function LookupTab({ show }: { show: (m: string) => void }) {
       return
     }
     stopScan()
-    setScanMsg('Point the camera at a barcode.')
+    handledRef.current = false
+    setScanMsg('Starting camera…')
     setScanning(true)
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    const constraints: MediaStreamConstraints = {
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-    }
+    let stream: MediaStream
     try {
-      try {
-        // Food barcodes are usually 1D EAN/UPC codes. Chrome may expose the
-        // native BarcodeDetector but fail to detect those formats on some
-        // devices, leaving the camera preview alive with no result. Use ZXing as
-        // the primary scanner because it handles EAN/UPC reliably in-browser.
-        await startZxingScan(constraints)
-      } catch {
-        stopScan()
-        setScanning(true)
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-        await startNativeBarcodeScan(constraints)
-        setScanMsg('Point the camera at a barcode. Using native scanner for this browser.')
-      }
-    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      })
+    } catch (e) {
       stopScan()
-      setScanMsg('Camera permission denied or unavailable. Enter the barcode manually.')
+      setScanMsg(cameraErrorMessage(e))
+      return
     }
+    streamRef.current = stream
+    const video = videoRef.current
+    if (!video) {
+      stopScan()
+      setScanMsg('Could not open the camera preview. Try again or enter the code manually.')
+      return
+    }
+    video.srcObject = stream
+    try { await video.play() } catch { /* interrupted by a stop — the checks below handle it */ }
+    const hasPicture = await waitForVideoSize(video, 5000)
+    if (!streamRef.current) return // user pressed Stop while starting
+    if (!hasPicture) {
+      stopScan()
+      setScanMsg('The camera started but produced no picture. Try again or enter the code manually.')
+      return
+    }
+    // Continuous autofocus makes close-up barcodes readable on many phones.
+    // Not universally supported, so failures are fine to ignore.
+    const [track] = stream.getVideoTracks()
+    track?.applyConstraints({ advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet] }).catch(() => {})
+    setScanMsg('Point the camera at the barcode — hold it steady and fill the frame with the bars.')
+    startZxingLoop(video)
+    startNativeLoop(video)
   }
 
   const search = async () => {
