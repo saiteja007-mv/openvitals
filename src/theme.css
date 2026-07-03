@@ -137,6 +137,14 @@ input, select, textarea { font-family: var(--font); }
   padding: 12px 14px; border-radius: var(--r-md); font-size: 16px; width: 100%;
 }
 .input:focus, .select:focus { box-shadow: inset 0 0 0 2px var(--ink); }
+.password-input-wrap { position: relative; display: flex; align-items: center; }
+.password-input-wrap .input { padding-right: 76px; }
+.password-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: none; border-radius: var(--r-pill); background: var(--canvas); color: var(--ink);
+  font-size: 13px; font-weight: 600; padding: 7px 10px; cursor: pointer;
+}
+.password-toggle:hover { background: var(--surface-pressed); }
 
 /* Table */
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }

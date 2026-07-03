@@ -38,4 +38,31 @@ test('extractHealthMetrics uses latest non-null across trends + metricTrends', (
   assert.equal(h.sleepMin, 431)
   assert.equal(h.weightKg, null)       // genuinely no data
   assert.equal(h.asOf, '2026-06-30')
+
+  const today = s.extractHealthMetrics(cached, '2026-07-01')
+  assert.equal(today.steps, 7873)       // requested current day still falls back while mid-sync
+  assert.equal(today.restingHr, 60)
+  assert.equal(today.hrv, 73.3)
+  assert.equal(today.spo2, 96.8)
+
+  const calFallback = s.extractHealthMetrics({
+    date: '2026-07-01',
+    endpoints: { caloriesTrend: { 'activities-calories': [{ dateTime: '2026-06-30', value: 2222 }] } },
+  }, '2026-07-01')
+  assert.equal(calFallback.caloriesOut, 2222)
+
+  const liveCalories = s.extractHealthMetrics({
+    date: '2026-07-01',
+    endpoints: {
+      activity: { summary: { caloriesOut: 1494.68 } },
+      caloriesTrend: { 'activities-calories': [{ dateTime: '2026-07-01', value: 1000 }] },
+    },
+  }, '2026-07-01')
+  assert.equal(liveCalories.caloriesOut, 1495)
+
+  const localToday = new Date().toISOString().slice(0, 10)
+  const noCachedDate = s.extractHealthMetrics({
+    endpoints: { stepsTrend: { 'activities-steps': [{ dateTime: '2026-06-30', value: 7873 }, { dateTime: localToday }] } },
+  }, localToday)
+  assert.equal(noCachedDate.steps, 7873)
 })

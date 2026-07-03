@@ -18,84 +18,108 @@ function calorieBalance({ calIn, caloriesOut }) {
   return { in: i, out: o, net: i - o }
 }
 
-// Return the present value at the MAX date — order-independent, since OpenFit's
-// trend arrays are inconsistently sorted (steps oldest-first, sleep newest-first).
+const rowDate = (r) => r.dateTime || r.date || (r.endTime || r.startTime || '').slice(0, 10) || null
+
+// Present value at the MAX date — order-independent (OpenFit arrays sort inconsistently).
 function latest(arr, pick) {
   if (!Array.isArray(arr)) return { value: null, date: null }
   let best = { value: null, date: null }
-  for (const row of arr) {
-    const v = pick(row)
+  for (const r of arr) {
+    const v = pick(r)
     if (v == null || v === '') continue
-    const dt = row.dateTime || row.date || (row.endTime || row.startTime || '').slice(0, 10) || null
-    if (!best.date || (dt && dt > best.date)) best = { value: v, date: dt }
+    const d = rowDate(r)
+    if (!best.date || (d && d > best.date)) best = { value: v, date: d }
   }
   return best
 }
 
-// Latest night's sleep: prefer the main sleep session on the most recent date, else sum all sessions that day.
+// Value for an exact date, else null.
+function valueOn(arr, pick, date) {
+  if (!Array.isArray(arr)) return null
+  for (const r of arr) {
+    if (rowDate(r) === date) { const v = pick(r); if (v != null && v !== '') return v }
+  }
+  return null
+}
+
 function latestSleep(arr) {
   if (!Array.isArray(arr) || !arr.length) return { value: null, date: null }
   const byDate = {}
   for (const s of arr) {
     if (s.minutesAsleep == null) continue
-    const dt = (s.endTime || s.startTime || s.dateTime || '').slice(0, 10)
-    if (!dt) continue
-    ;(byDate[dt] = byDate[dt] || []).push(s)
+    const d = (s.endTime || s.startTime || s.dateTime || '').slice(0, 10)
+    if (d) (byDate[d] = byDate[d] || []).push(s)
   }
   const dates = Object.keys(byDate).sort()
   if (!dates.length) return { value: null, date: null }
-  const d = dates[dates.length - 1]
-  const sessions = byDate[d]
-  const main = sessions.find((s) => s.isMainSleep)
-  const value = main ? main.minutesAsleep : sessions.reduce((a, s) => a + (s.minutesAsleep || 0), 0)
-  return { value, date: d }
+  return { value: sleepMinutes(byDate[dates[dates.length - 1]]), date: dates[dates.length - 1] }
 }
+function sleepOn(arr, date) {
+  if (!Array.isArray(arr)) return null
+  const s = arr.filter((x) => x.minutesAsleep != null && (x.endTime || x.startTime || x.dateTime || '').slice(0, 10) === date)
+  return s.length ? sleepMinutes(s) : null
+}
+function sleepMinutes(sessions) {
+  const main = sessions.find((x) => x.isMainSleep)
+  return main ? main.minutesAsleep : sessions.reduce((a, x) => a + (x.minutesAsleep || 0), 0)
+}
+
 const r1 = (v) => (v == null ? null : Math.round(Number(v)))
 const r10 = (v) => (v == null ? null : Math.round(Number(v) * 10) / 10)
 
-// Mirrors the Google Health app: show the most recent available reading per metric,
-// since "today" is often mid-sync (steps/HR/HRV land later than calories).
-function extractHealthMetrics(cached) {
+// date optional. If omitted or >= today (OpenFit's cached.date), fall back to latest-available
+// (mirrors Google Health "today" tiles while today is mid-sync). For a past date, show that exact day.
+function extractHealthMetrics(cached, date) {
   const ep = (cached && cached.endpoints) || {}
   const mt = (ep.metricTrends && ep.metricTrends.values) || []
-  const m = (field) => latest(mt, (r) => r[field])
+  const today = (cached && cached.date) || new Date().toISOString().slice(0, 10)
+  const fb = !date || date >= today
 
-  const steps = latest(ep.stepsTrend && ep.stepsTrend['activities-steps'], (r) => r.value)
-  const rhr = latest(ep.heartTrend && ep.heartTrend['activities-heart'], (r) => r.value && r.value.restingHeartRate)
-  const calTrend = latest(ep.caloriesTrend && ep.caloriesTrend['activities-calories'], (r) => r.value)
-  const sleep = latestSleep(ep.sleepTrend && ep.sleepTrend.sleep)
-  const weight = latest(ep.bodyWeight && ep.bodyWeight.weight, (r) => r.weight)
-  const todayCalOut = ep.activity && ep.activity.summary ? ep.activity.summary.caloriesOut : null
+  const M = (arr, pick) => {
+    if (date) { const v = valueOn(arr, pick, date); if (v != null) return v }
+    return fb ? latest(arr, pick).value : null
+  }
+  const sleepMin = (() => {
+    if (date) { const v = sleepOn(ep.sleepTrend && ep.sleepTrend.sleep, date); if (v != null) return v }
+    return fb ? latestSleep(ep.sleepTrend && ep.sleepTrend.sleep).value : null
+  })()
 
-  const hrv = m('hrvMs'); const spo2 = m('spo2'); const breath = m('breathingRate')
-  const dist = m('distanceKm'); const active = m('activeMinutes'); const zone = m('zoneMinutes')
-  const sleepEff = m('sleepEfficiency'); const skin = m('skinTemperature'); const cardio = m('cardioScore')
+  const calTrend = ep.caloriesTrend && ep.caloriesTrend['activities-calories']
+  const calToday = ep.activity && ep.activity.summary ? ep.activity.summary.caloriesOut : null
+  let calOut = date ? valueOn(calTrend, (r) => r.value, date) : latest(calTrend, (r) => r.value).value
+  // OpenFit's current day (or no-date/latest view) has live partial calories in activity.summary;
+  // if that is unavailable during mid-sync, keep showing the latest trend value.
+  if (calToday != null && (!date || date === today)) calOut = calToday
+  if (calOut == null && fb) calOut = latest(calTrend, (r) => r.value).value
 
-  const dates = [steps.date, rhr.date, hrv.date, sleep.date].filter(Boolean).sort()
+  const stepsV = M(ep.stepsTrend && ep.stepsTrend['activities-steps'], (r) => r.value)
+  const latestStepsDate = latest(ep.stepsTrend && ep.stepsTrend['activities-steps'], (r) => r.value).date
+  const asOf = fb ? (latestStepsDate || today || date) : date
+
   return {
-    steps: r1(steps.value),
-    caloriesOut: todayCalOut != null ? r1(todayCalOut) : r1(calTrend.value),
-    restingHr: r1(rhr.value),
-    sleepMin: r1(sleep.value),
-    sleepEfficiency: r1(sleepEff.value),
-    hrv: r10(hrv.value),
-    spo2: r10(spo2.value),
-    breathingRate: r10(breath.value),
-    distanceKm: r10(dist.value),
-    activeMinutes: r1(active.value),
-    zoneMinutes: r1(zone.value),
-    skinTemperature: r10(skin.value),
-    cardioScore: r10(cardio.value),
-    weightKg: r10(weight.value),
-    asOf: dates.length ? dates[dates.length - 1] : (cached && cached.date) || null,
+    steps: r1(stepsV),
+    caloriesOut: r1(calOut),
+    restingHr: r1(M(ep.heartTrend && ep.heartTrend['activities-heart'], (r) => r.value && r.value.restingHeartRate)),
+    sleepMin: r1(sleepMin),
+    sleepEfficiency: r1(M(mt, (r) => r.sleepEfficiency)),
+    hrv: r10(M(mt, (r) => r.hrvMs)),
+    spo2: r10(M(mt, (r) => r.spo2)),
+    breathingRate: r10(M(mt, (r) => r.breathingRate)),
+    distanceKm: r10(M(mt, (r) => r.distanceKm)),
+    activeMinutes: r1(M(mt, (r) => r.activeMinutes)),
+    zoneMinutes: r1(M(mt, (r) => r.zoneMinutes)),
+    skinTemperature: r10(M(mt, (r) => r.skinTemperature)),
+    cardioScore: r10(M(mt, (r) => r.cardioScore)),
+    weightKg: r10(M(ep.bodyWeight && ep.bodyWeight.weight, (r) => r.weight)),
+    asOf,
   }
 }
 
 function daySummary(date, { cached, workouts, meals }) {
-  const health = extractHealthMetrics(cached)
+  const health = extractHealthMetrics(cached, date)
   const nutrition = nutritionTotals(meals)
   const balance = calorieBalance({ calIn: nutrition.calIn, caloriesOut: health.caloriesOut })
   return { date, health, workouts, meals, nutrition, balance }
 }
 
-module.exports = { extractHealthMetrics, nutritionTotals, calorieBalance, daySummary, latest }
+module.exports = { extractHealthMetrics, nutritionTotals, calorieBalance, daySummary, latest, latestSleep }

@@ -15,9 +15,9 @@ export function Button({ variant = 'primary', size = 'md', loading, children, cl
   )
 }
 
-export function Card({ children, soft, dark, className = '' }: { children: React.ReactNode; soft?: boolean; dark?: boolean; className?: string }) {
+export function Card({ children, soft, dark, className = '', onClick }: { children: React.ReactNode; soft?: boolean; dark?: boolean; className?: string; onClick?: () => void }) {
   const base = dark ? 'card-dark' : soft ? 'card-soft' : 'card'
-  return <div className={`${base} ${className}`.trim()}>{children}</div>
+  return <div className={`${base} ${className}`.trim()} onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>{children}</div>
 }
 
 export function Stat({ label, value, unit }: { label: string; value: React.ReactNode; unit?: string }) {
