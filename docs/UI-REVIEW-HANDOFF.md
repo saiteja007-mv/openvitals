@@ -3,7 +3,12 @@
 > Resume point for the 68-finding UI enhancement pass. Full interactive triage doc (artifact):
 > https://claude.ai/code/artifact/53d663cf-0b0d-4b91-a28b-f5d1dafd59d9
 
-**Progress: Batches A–J committed on `ui-review-batches` — 62 addressed / 68 (6 pending)** (all committed; tsc + build + 66 tests green. Checklist checkboxes below.)
+**Progress: COMPLETE — Batches A–K committed on `ui-review-batches`, 68 / 68 addressed** (tsc + build + 66 tests green). A few finding *sub-notes* were consciously deferred as lower-value (see below); every finding itself is addressed.
+
+### Consciously deferred sub-notes (optional future polish)
+- **Trends** — prev-window Δ (currently shows `latest · avg`, not "vs prev 30d").
+- **Body** — inline *edit* of history entries (delete is done).
+- **Exercises** — full modal focus-*trap* (focus-on-open + Escape + restore are done; Tab can still leave the dialog).
 
 ## How to resume
 1. `cd ~/consied` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
@@ -11,7 +16,7 @@
 3. Run locally: `npm run server` (backend :PORT) + `npm run dev` (Vite). DB at `.data/consied.sqlite`.
 4. Pick the next unchecked `[ ]` item below (they are ordered High→Low within each screen). Work screen-by-screen; keep diffs small; re-run tsc+tests after each screen; update this file's checkboxes + progress count.
 
-## Already shipped this session (Batches A–I committed on `ui-review-batches`)
+## Already shipped this session (Batches A–K committed on `ui-review-batches`)
 - **Streak = log-to-count**: `server/db.cjs` habitStreak drops the auto-grace; `src/screens/Today.tsx` optimistic update; `test/db.test.cjs` updated. (66 tests pass.)
 - **Log button**: habit checkbox → `Log` / `✓ Logged` pill in `src/screens/Today.tsx`.
 - **Batch A — design system** (below, marked ✅): `src/theme.css` (stat-unit contrast, .stat-delta, .empty-action, @media(pointer:coarse) 44px targets), `src/components/UI.tsx` (Button spinner variant-aware, Empty `action` slot, Stat `delta` slot), `src/screens/Today.tsx` (monochrome calorie balance + no-meals guard).
@@ -23,6 +28,7 @@
 - **Batch F — Trends + Body charts** (`src/components/chart.tsx` NEW, `Trends.tsx`, `Body.tsx`): shared monochrome `CHART`/`AXIS`/`TOOLTIP` (styled Recharts tooltip, one palette source); Trends page-level no-sync Empty guard, `latest · avg` summary per card, dashed "In" line. Body first-run onboarding, `Stat delta` ▲/▼ vs-last, notes shown, `.row-wrap`, save-guard, delete-with-confirm. Deferred: Trends prev-window Δ + per-metric never-logged copy; Body inline edit.
 - **Batches G/H/I — Settings / Food / Workouts** (parallel workflow, 3 disjoint files): **G Settings** — reminder On/Off active pill, styled "Choose backup file…" button, reminders empty state, mobile field-wrap, friendlier microcopy, net-neg token for flags. **H Food** — legible "30g P · 40g C · 12g F" macros everywhere, trash/pencil emoji → monochrome SVG, single primary in Lookup, isolated "Log as" chip, Total-intake kcal hero + macro Stat tiles. **I Workouts** — Progress as Stat tiles (Max weight ▲/▼ vs last month + Last volume), ✓ on logged plan items, Plans empty state, ▸/▾ disclosure chevron, Kind → Select, log table scrolls in-card.
 - **Batch J — Login + Modal/Toast a11y** (`Login.tsx`, `components/UI.tsx`): Login surfaces the real error (not always "Incorrect password"), announces it via `role="alert"` + `aria-invalid`/`aria-describedby`, clears it on retype, lifts the card (`elevated`), gives the wordmark a hero scale + "Sign in to continue." subhead, and uses the `net-neg` token. Modal → `role="dialog" aria-modal aria-labelledby`, Escape-to-close, focus-on-open (won't steal an autoFocus field) + restore-on-close. Toast → `role="status" aria-live="polite"`.
+- **Batch K — final polish** (`Today.tsx`, `Trends.tsx`, `App.tsx`, `theme.css`, `Body.tsx`): Today only blocks on first load (date changes keep the page mounted, no collapse) + goal-progress deltas on Steps/Sleep; mobile bottom bar capped at 5 tabs (Trends → app-bar icon via `.only-mobile`); branded full-height boot screen; Body progress photo uses a styled "Add photo" button over a hidden input; Trends charts say "No data logged yet" vs "No data for this range".
 
 > NOTE: `Empty` now takes an `action?` prop and `Stat` takes a `delta?` prop — the primitives are ready; wiring CTAs / deltas into each screen is part of the pending per-screen items. The `.excard:focus-visible` ring is in place but Exercises cards still need `role="button" tabIndex={0}` + keydown to actually receive focus (see Exercises pending).
 
@@ -32,13 +38,9 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 ### Today
 - [x] `H/S` `consistency` **Calorie balance uses green/red — the only color on a strict-monochrome screen** — ✅ Batch A
 - [x] `H/S` `information-design` **A big green "-1,495 deficit" is shown when zero meals are logged** — ✅ Batch A
-- [ ] `H/M` `interaction` **Every date change blanks the whole screen to a tiny centered spinner**
-  - fix: Keep the header and the day-nav row mounted; gate only the data region below it. Either move `<Loading/>` into the content area, or render skeleton stat cards (reuse `.stat` chrome with a `--canvas-soft` fill) while `loading`. The day title
-  - loc: `src/screens/Today.tsx:136,72-85`
+- [x] `H/M` `interaction` **Every date change blanks the whole screen to a tiny centered spinner** — ✅ Batch K
 - [x] `M/S` `empty-state` **Empty Workouts and Meals sections are dead-end slabs with no way to act** — ✅ Batch D (Empty `action` CTAs → /workouts, /food)
-- [ ] `M/M` `information-design` **12 identical stat cards with no hierarchy, and bare "—" gives no reason a value is missing**
-  - fix: For metrics that have a goal in Settings, add a `.caption` delta under the value (e.g. '1,127 to goal' / '92% of goal') reusing the numbers the Goals card already computes — this both creates hierarchy and links the two sections. For '—', u
-  - loc: `src/screens/Today.tsx:209-222; src/components/UI.tsx:23-30`
+- [x] `M/M` `information-design` **12 identical stat cards with no hierarchy, and bare "—" gives no reason a value is missing** — ✅ Batch K
 - [x] `M/S` `accessibility` **Day-nav arrows are 36px — below the 44px touch target the brand itself specifies** — ✅ Batch A
 - [x] `L/S` `microcopy` **Raw ISO dates ('2026-06-30') break the friendly, sentence-case brand voice** — ✅ Batch D (`fmtDay()` → "Jul 4")
 
@@ -64,8 +66,7 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [x] `H/M` `information-design` **Charts show shapes but zero comparable numbers** — ✅ Batch F (ChartCard header shows `latest · avg`; prev-window Δ still TODO)
 - [x] `M/S` `visual` **Default Recharts Tooltip breaks the monochrome Base-Web language** — ✅ Batch F (shared `TOOLTIP` in `components/chart.tsx`)
 - [x] `M/S` `accessibility` **Calories in-vs-out relies on faint grey-vs-black color alone** — ✅ Batch F ("In" line dashed + `CHART.mid`)
-- [ ] `M/S` `microcopy` **Per-metric 'No data for this range' misleads for never-logged metrics** — DEFERRED (page-level guard covers all-empty; per-metric "never logged" nuance not done)
-  - loc: `src/screens/Trends.tsx` NoData
+- [x] `M/S` `microcopy` **Per-metric 'No data for this range' misleads for never-logged metrics** — ✅ Batch K
 - [x] `M/S` `accessibility` **Range chips and pager arrows are sub-44px touch targets** — ✅ Batch A
 - [x] `L/S` `consistency` **Chart colors hardcoded instead of theme tokens** — ✅ Batch F (`CHART`/`AXIS` in `components/chart.tsx`)
 
@@ -101,14 +102,10 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 ### App shell + navigation
 - [x] `H/M` `visual` **Colored emoji nav icons break the strict-monochrome system** — ✅ Batch B (monochrome SVG icons, currentColor)
 - [x] `M/S` `consistency` **Bottom-nav active state is far weaker than the top-nav pill** — ✅ Batch B (2px ink top-bar + bold on `.bnitem.active`)
-- [ ] `M/M` `responsive` **Six equal-width tabs overcrowd the mobile bottom bar**
-  - fix: Cap the mobile bottom bar at 5 primary tabs and demote the overflow (e.g. Trends) — either fold it under a 'More' tab or surface it in the appbar next to the ⚙ gear, which is already the mobile home for secondary destinations. Keeps each ta
-  - loc: `src/App.tsx:61-68`
+- [x] `M/M` `responsive` **Six equal-width tabs overcrowd the mobile bottom bar** — ✅ Batch K
 - [x] `M/S` `accessibility` **Nav links have no keyboard-focus indication** — ✅ Batch B (app-wide `:focus-visible` ink ring)
 - [x] `L/S` `interaction` **Brand wordmark is not a link to Today** — ✅ Batch B (`NavLink to="/"`)
-- [ ] `L/S` `empty-state` **Whole-app boot state is a tiny top-anchored spinner**
-  - fix: Give the boot state real vertical presence: add min-height:100vh and align-items:center to .center-load (or a boot-specific variant). Optionally show the 'Consied.' wordmark above the spinner so the first paint is branded rather than empty.
-  - loc: `src/App.tsx:32`
+- [x] `L/S` `empty-state` **Whole-app boot state is a tiny top-anchored spinner** — ✅ Batch K
 
 ### Body metrics
 - [x] `H/M` `consistency` **History entries are read-only — no edit or delete** — ✅ Batch F (delete w/ confirm; inline edit still TODO)
@@ -118,8 +115,7 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [x] `M/S` `information-design` **Notes are captured and saved but never shown** — ✅ Batch F (rendered under history summary)
 - [x] `M/S` `responsive` **Three number inputs in a non-wrapping row cram on mobile** — ✅ Batch F (`.row` → `.row-wrap`)
 - [x] `M/S` `interaction` **Save is enabled on an empty form** — ✅ Batch F (disabled until a value/photo present)
-- [ ] `M/S` `visual` **Raw browser file input breaks the monochrome look** — DEFERRED (file-input styling; also affects Settings restore — do as one mini-batch)
-  - fix: Hide the native `<input type="file">`, trigger from a `<label>`+`Button variant="subtle"` ("Add photo"), show chosen filename/thumbnail. loc: `Body.tsx` EntryForm photo field + `Settings.tsx:209`.
+- [x] `M/S` `visual` **Raw browser file input breaks the monochrome look** — ✅ Batch K
 
 ### Design system (tokens + UI kit)
 - [x] `H/S` `empty-state` **Empty state has no action slot** — ✅ Batch A (`Empty action` prop; wired on Today in D)
