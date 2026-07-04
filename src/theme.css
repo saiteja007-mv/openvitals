@@ -199,6 +199,12 @@ input, select, textarea { font-family: var(--font); }
   .password-toggle { padding: 11px 12px; }
 }
 
+/* Skeleton loaders (reuse card chrome; pulse respects reduced-motion) */
+.skelbar { height: 12px; border-radius: 6px; background: var(--canvas-soft); }
+.skelcard .exthumb, .skelbar { animation: skelpulse 1.3s ease-in-out infinite; }
+@keyframes skelpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .skelcard .exthumb, .skelbar { animation: none; } }
+
 /* Spinner */
 .spin { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: sp 0.7s linear infinite; display: inline-block; }
 .spin-dark { border: 2px solid var(--surface-pressed); border-top-color: var(--ink); }

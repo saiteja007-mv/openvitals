@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, nowLocalInput } from '../api'
 import type { Exercise, Facets } from '../types'
-import { Button, Field, Input, Select, Loading, Empty, Modal, useToast } from '../components/UI'
+import { Button, Field, Input, Select, Empty, Modal, useToast } from '../components/UI'
 
+// Quiet monochrome mark (centered dumbbell) — no repeated "no preview" text cluttering the grid.
 const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="150"><rect width="200" height="150" fill="#efefef"/><text x="100" y="80" font-family="sans-serif" font-size="14" fill="#afafaf" text-anchor="middle">no preview</text></svg>`
+  `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="150"><rect width="200" height="150" fill="#efefef"/><g transform="translate(100 75)" stroke="#c4c4c4" stroke-width="5" stroke-linecap="round" fill="none"><path d="M-30 0h60"/><path d="M-34 -11v22M-40 -6v12M34 -11v22M40 -6v12"/></g></svg>`
 )
 
 function stepsOf(ex: Exercise): string[] {
@@ -22,6 +23,7 @@ export default function Exercises() {
   const [equipment, setEquipment] = useState('')
   const [items, setItems] = useState<Exercise[]>([])
   const [total, setTotal] = useState(0)
+  const [limit, setLimit] = useState(48)
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState<Exercise | null>(null)
   const [logFor, setLogFor] = useState<Exercise | null>(null)
@@ -31,12 +33,12 @@ export default function Exercises() {
   useEffect(() => {
     setLoading(true)
     const t = setTimeout(() => {
-      api.searchExercises({ q, bodyPart, equipment, limit: 48 })
+      api.searchExercises({ q, bodyPart, equipment, limit })
         .then((r) => { setItems(r.items); setTotal(r.total) })
         .finally(() => setLoading(false))
     }, 220)
     return () => clearTimeout(t)
-  }, [q, bodyPart, equipment])
+  }, [q, bodyPart, equipment, limit])
 
   return (
     <div>
@@ -44,32 +46,56 @@ export default function Exercises() {
       <div className="caption" style={{ marginTop: 4 }}>{total.toLocaleString()} exercises</div>
 
       <div className="stack" style={{ marginTop: 16, marginBottom: 16 }}>
-        <Input placeholder="Search exercises…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div style={{ position: 'relative' }}>
+          <Input placeholder="Search exercises…" value={q} onChange={(e) => { setQ(e.target.value); setLimit(48) }} style={{ paddingRight: q ? 42 : undefined }} />
+          {q && (
+            <button type="button" onClick={() => { setQ(''); setLimit(48) }} aria-label="Clear search"
+              style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', width: 28, height: 28, borderRadius: 999, border: 'none', background: 'var(--canvas)', color: 'var(--body)', cursor: 'pointer', fontSize: 13 }}>✕</button>
+          )}
+        </div>
         <div className="row-wrap">
-          <Select value={bodyPart} onChange={(e) => setBodyPart(e.target.value)} style={{ width: 'auto' }}>
+          <Select value={bodyPart} onChange={(e) => { setBodyPart(e.target.value); setLimit(48) }} style={{ width: 'auto' }}>
             <option value="">All body parts</option>
             {facets?.bodyParts.map((b) => <option key={b} value={b}>{b}</option>)}
           </Select>
-          <Select value={equipment} onChange={(e) => setEquipment(e.target.value)} style={{ width: 'auto' }}>
+          <Select value={equipment} onChange={(e) => { setEquipment(e.target.value); setLimit(48) }} style={{ width: 'auto' }}>
             <option value="">All equipment</option>
             {facets?.equipment.map((b) => <option key={b} value={b}>{b}</option>)}
           </Select>
         </div>
       </div>
 
-      {loading ? <Loading /> : items.length === 0 ? <Empty>No exercises match.</Empty> : (
+      {loading && items.length === 0 ? (
         <div className="grid exgrid">
-          {items.map((ex) => (
-            <div key={ex.id} className="excard" onClick={() => setDetail(ex)}>
-              <img className="exthumb" loading="lazy" src={ex.image_url || ex.gif_url || ex.image || PLACEHOLDER} alt={ex.name}
-                onError={(e) => { (e.target as HTMLImageElement).src = PLACEHOLDER }} />
-              <div className="exbody">
-                <div className="exname">{ex.name}</div>
-                <div className="extag">{ex.target} · {ex.equipment}</div>
-              </div>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="excard skelcard" aria-hidden="true">
+              <div className="exthumb" />
+              <div className="exbody"><div className="skelbar" style={{ width: '70%' }} /><div className="skelbar" style={{ width: '45%', marginTop: 8 }} /></div>
             </div>
           ))}
         </div>
+      ) : items.length === 0 ? <Empty>No exercises match.</Empty> : (
+        <>
+          <div className="grid exgrid" style={{ opacity: loading ? 0.5 : 1, transition: 'opacity .15s ease', pointerEvents: loading ? 'none' : undefined }}>
+            {items.map((ex) => (
+              <div key={ex.id} className="excard" role="button" tabIndex={0} aria-label={ex.name}
+                onClick={() => setDetail(ex)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(ex) } }}>
+                <img className="exthumb" loading="lazy" src={ex.image_url || ex.gif_url || ex.image || PLACEHOLDER} alt=""
+                  onError={(e) => { (e.target as HTMLImageElement).src = PLACEHOLDER }} />
+                <div className="exbody">
+                  <div className="exname">{ex.name}</div>
+                  <div className="extag">{ex.target} · {ex.equipment}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ justifyContent: 'center', marginTop: 20 }}>
+            {items.length < total
+              ? <Button variant="subtle" onClick={() => setLimit((l) => l + 48)} loading={loading}>Load more · showing {items.length.toLocaleString()} of {total.toLocaleString()}</Button>
+              : <div className="caption">All {total.toLocaleString()} shown</div>}
+          </div>
+        </>
       )}
 
       {detail && (
@@ -81,9 +107,13 @@ export default function Exercises() {
             <span className="tag">{detail.target}</span>
             <span className="tag">{detail.equipment}</span>
           </div>
-          <ol className="stack" style={{ paddingLeft: 18, color: 'var(--body)', fontSize: 14 }}>
-            {stepsOf(detail).map((s, i) => <li key={i}>{s}</li>)}
-          </ol>
+          {stepsOf(detail).length > 0 ? (
+            <ol className="stack" style={{ paddingLeft: 18, color: 'var(--body)', fontSize: 14 }}>
+              {stepsOf(detail).map((s, i) => <li key={i}>{s}</li>)}
+            </ol>
+          ) : (
+            <div className="caption">No instructions available.</div>
+          )}
           <div style={{ marginTop: 16 }}>
             <Button variant="primary" onClick={() => { setLogFor(detail); setDetail(null) }}>Log this workout</Button>
           </div>

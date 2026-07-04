@@ -3,7 +3,7 @@
 > Resume point for the 68-finding UI enhancement pass. Full interactive triage doc (artifact):
 > https://claude.ai/code/artifact/53d663cf-0b0d-4b91-a28b-f5d1dafd59d9
 
-**Progress: Batches A + B + C + D shipped — ~20 findings addressed / 68 total** (checklist checkboxes below; token-level fixes also silently close the touch-target + contrast items across every screen)
+**Progress: Batches A–E committed on `ui-review-batches` — ~26 findings addressed / 68 total** (checklist checkboxes below; token-level fixes also silently close the touch-target + contrast items across every screen)
 
 ## How to resume
 1. `cd ~/consied` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
@@ -19,6 +19,7 @@
 - **Batch B — app shell / nav** (`src/App.tsx`, `src/theme.css`): emoji nav icons → inline monochrome SVGs (`ICONS`/`NavIcon`, currentColor); bottom-nav active indicator (2px ink top-bar + bold); brand wordmark now links to Today; app-wide `:focus-visible` ink ring for all nav/buttons/chips/cards.
 - **Batch C — destructive-action guards** (`Food.tsx`, `Workouts.tsx`, `Settings.tsx`): `confirm()` root-caused in each shared `del`/`restore` — meal, template, workout, plan, reminder deletes + the **Restore-backup wipe** (the data-loss trap) now all require confirmation.
 - **Batch D — Today polish** (`src/screens/Today.tsx`): empty Workouts/Meals slabs now carry a "Log a workout/meal" CTA via the new `Empty action` slot (routes to /workouts, /food); raw ISO dates → friendly `fmtDay()` ("Jul 4").
+- **Batch E — Exercises** (`src/screens/Exercises.tsx`, `src/theme.css`): skeleton cards on first load + grid dims on re-filter (no more full-grid spinner flash); cards keyboard-accessible (`role/tabIndex/onKeyDown`); honest "Load more · showing N of total"; quiet monochrome dumbbell placeholder (no "no preview" text); modal "No instructions available." fallback; inline search-clear ✕.
 
 > NOTE: `Empty` now takes an `action?` prop and `Stat` takes a `delta?` prop — the primitives are ready; wiring CTAs / deltas into each screen is part of the pending per-screen items. The `.excard:focus-visible` ring is in place but Exercises cards still need `role="button" tabIndex={0}` + keydown to actually receive focus (see Exercises pending).
 
@@ -39,24 +40,12 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [x] `L/S` `microcopy` **Raw ISO dates ('2026-06-30') break the friendly, sentence-case brand voice** — ✅ Batch D (`fmtDay()` → "Jul 4")
 
 ### Exercises
-- [ ] `H/M` `interaction` **Every keystroke/filter change flashes the whole grid to a centered spinner**
-  - fix: Keep the previous results mounted while re-fetching. Only render <Loading/> on the very first load (e.g. `loading && items.length === 0`); otherwise render the grid at reduced opacity (opacity:.5, pointer-events:none) or render skeleton exc
-  - loc: `src/screens/Exercises.tsx:32,60`
-- [ ] `H/S` `accessibility` **Exercise cards are non-semantic clickable divs — unreachable by keyboard**
-  - fix: Add `role="button" tabIndex={0}` and an `onKeyDown` that fires setDetail on Enter/Space to the `.excard`, plus `aria-label={ex.name}`. Give `.excard:focus-visible` the same `box-shadow: var(--shadow-1)` it already uses on hover so keyboard 
-  - loc: `src/screens/Exercises.tsx:63`
-- [ ] `H/M` `information-design` **48 of 1,324 shown with no 'load more' and a misleading count**
-  - fix: Make the count honest and add a way forward. Change the caption to `Showing {items.length} of {total.toLocaleString()}` when items.length < total, and add a full-width `<Button variant="subtle">Load more</Button>` below the grid that bumps 
-  - loc: `src/screens/Exercises.tsx:34,44`
-- [ ] `M/S` `visual` **'no preview' placeholder dominates the grid and uses the wrong font**
-  - fix: Replace the text-bearing raster placeholder with a single quiet monochrome mark: a centered dumbbell/figure glyph (or the exercise's first initial) in `var(--mute)` on `var(--canvas-soft)` — no words to repeat. If keeping text, at minimum s
-  - loc: `src/screens/Exercises.tsx:6`
-- [ ] `M/S` `empty-state` **Detail modal renders a blank body when an exercise has no instructions**
-  - fix: When `stepsOf(detail).length === 0`, render a muted line instead of the empty list, e.g. `<div className="caption">No instructions available.</div>` — reuses the existing caption token and matches the app's terse microcopy.
-  - loc: `src/screens/Exercises.tsx:84`
-- [ ] `M/S` `interaction` **Search field has no clear affordance and filters can't be reset in one gesture**
-  - fix: When `q` is non-empty, show an inline clear button inside the field using the existing `.password-toggle` positioning pattern (absolute, right-aligned, pill) or the `.iconbtn` style, setting `q` back to ''. Optionally, when any of q/bodyPar
-  - loc: `src/screens/Exercises.tsx:47`
+- [x] `H/M` `interaction` **Every keystroke/filter change flashes the whole grid to a centered spinner** — ✅ Batch E (skeleton cards on first load; grid dims on re-filter)
+- [x] `H/S` `accessibility` **Exercise cards are non-semantic clickable divs — unreachable by keyboard** — ✅ Batch E (role/tabIndex/onKeyDown + focus ring)
+- [x] `H/M` `information-design` **48 of 1,324 shown with no 'load more' and a misleading count** — ✅ Batch E (Load more + "showing N of total")
+- [x] `M/S` `visual` **'no preview' placeholder dominates the grid and uses the wrong font** — ✅ Batch E (quiet dumbbell mark, no text)
+- [x] `M/S` `empty-state` **Detail modal renders a blank body when an exercise has no instructions** — ✅ Batch E ("No instructions available.")
+- [x] `M/S` `interaction` **Search field has no clear affordance** — ✅ Batch E (inline clear ✕; filter reset to 48 on change)
 
 ### Meals (Food)
 - [x] `H/M` `interaction` **Delete is instant, unconfirmed, and one mis-tap away from Edit** — ✅ Batch C (confirm() on meal + template del; 44px targets from Batch A)
