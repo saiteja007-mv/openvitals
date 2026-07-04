@@ -258,11 +258,11 @@ function setHabit(date, habit, done) {
   return getHabits(date)
 }
 
-// Consecutive done-days ending at endDate. If endDate itself isn't marked done, the streak is
-// measured ending at the previous day (so a live streak survives a not-yet-checked "today").
+// Consecutive done-days ending at endDate. The day itself must be logged to count: a streak
+// only advances when you explicitly log that day — no automatic grace for an unlogged "today".
 function habitStreak(habit, endDate) {
   const done = new Set(db.prepare('SELECT date FROM habits WHERE habit = ? AND done = 1').all(habit).map((r) => r.date))
-  let d = done.has(endDate) ? endDate : shiftISO(endDate, -1)
+  let d = endDate
   let streak = 0
   while (done.has(d)) { streak++; d = shiftISO(d, -1) }
   return streak

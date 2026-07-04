@@ -92,7 +92,7 @@ test('custom habits: definitions, defaults, streaks, and 30/60 day history windo
   let habits = db.listHabits('2026-07-03')
   let noSoda = habits.find((h) => h.name === 'No soda')
   assert.equal(noSoda.done, false)
-  assert.equal(noSoda.streak, 2)
+  assert.equal(noSoda.streak, 0) // today (07-03) not logged -> streak counts only explicitly-logged days ending today
   assert.equal(noSoda.history.length, 30)
   assert.equal(noSoda.history.at(-1).date, '2026-07-03')
   assert.equal(noSoda.history.at(-2).done, true)
