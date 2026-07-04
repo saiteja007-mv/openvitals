@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, nowLocalInput, todayISO } from '../api'
 import type { Workout, WorkoutPlan, WorkoutPlanItem, PlanCompare, ProgressEntry } from '../types'
-import { Button, Card, Field, Input, Loading, Empty, Modal, useToast } from '../components/UI'
+import { Button, Card, Field, Input, Select, Stat, Loading, Empty, Modal, useToast } from '../components/UI'
 
 const num = (v: string) => (v === '' ? undefined : Number(v))
 const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10)
@@ -47,6 +47,7 @@ function LogTab() {
         <div style={{ marginTop: 16 }}><Empty>No workouts yet. Log one from the Exercises tab or tap Add.</Empty></div>
       ) : (
         <div className="card" style={{ marginTop: 16, padding: 8 }}>
+          <div style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead><tr><th>Date</th><th>Exercise</th><th>Detail</th><th></th></tr></thead>
             <tbody>
@@ -65,6 +66,7 @@ function LogTab() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -143,7 +145,9 @@ function PlansTab() {
         <div className="caption">Push / Pull / Legs and your own routines.</div>
         <Button variant="primary" size="sm" onClick={() => setEditing('new')}>New plan</Button>
       </div>
-      {loading ? <Loading /> : (
+      {loading ? <Loading /> : plans.length === 0 ? (
+        <div style={{ marginTop: 16 }}><Empty>No plans yet. Create a Push / Pull / Legs routine or your own with New plan.</Empty></div>
+      ) : (
         <div className="stack" style={{ marginTop: 16 }}>
           {plans.map((p) => (
             <PlanCard
@@ -177,9 +181,12 @@ function PlanCard({ plan, open, onToggle, onEdit, onDelete, onLogged }: {
           {plan.kind && <span className="tag" style={{ marginLeft: 8 }}>{plan.kind}</span>}
           <div className="caption">{plan.items.length} exercises</div>
         </div>
-        <div className="row" style={{ gap: 6 }} onClick={(e) => e.stopPropagation()}>
-          <button className="iconbtn" onClick={onEdit} aria-label="Edit">✎</button>
-          <button className="iconbtn" onClick={onDelete} aria-label="Delete">🗑</button>
+        <div className="row" style={{ gap: 6 }}>
+          <span className="caption" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          <div className="row" style={{ gap: 6 }} onClick={(e) => e.stopPropagation()}>
+            <button className="iconbtn" onClick={onEdit} aria-label="Edit">✎</button>
+            <button className="iconbtn" onClick={onDelete} aria-label="Delete">🗑</button>
+          </div>
         </div>
       </div>
       {open && (
@@ -217,7 +224,9 @@ function PlanItemRow({ planId, item, logged, onLogged }: { planId: number; item:
   return (
     <div style={{ borderTop: '1px solid var(--hairline)', paddingTop: 12 }}>
       <div className="row between">
-        <strong style={{ textTransform: 'capitalize' }}>{item.name}</strong>
+        <strong style={{ textTransform: 'capitalize', fontWeight: logged.length > 0 ? 600 : undefined }}>
+          {logged.length > 0 && <span aria-hidden="true" style={{ marginRight: 6 }}>✓</span>}{item.name}
+        </strong>
         <span className="caption">Target {item.target_sets ?? '-'}×{item.target_reps ?? '-'}{item.target_weight_kg ? ` @ ${item.target_weight_kg}kg` : ''}</span>
       </div>
       <div className="row" style={{ marginTop: 8 }}>
@@ -262,7 +271,14 @@ function PlanForm({ plan, onClose, onDone }: { plan: WorkoutPlan | null; onClose
     <Modal title={plan ? 'Edit plan' : 'New plan'} onClose={onClose}>
       <div className="stack">
         <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Push Day" /></Field>
-        <Field label="Kind"><Input value={kind} onChange={(e) => setKind(e.target.value)} placeholder="push / pull / legs / custom" /></Field>
+        <Field label="Kind">
+          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="push">push</option>
+            <option value="pull">pull</option>
+            <option value="legs">legs</option>
+            <option value="custom">custom</option>
+          </Select>
+        </Field>
         <div className="stat-label">Exercises</div>
         <div className="stack">
           {items.map((it, i) => (
@@ -298,14 +314,21 @@ function ProgressTab() {
             <strong style={{ textTransform: 'capitalize' }}>{p.name}</strong>
             {p.isPR && <span className="tag" style={{ background: 'var(--black)', color: '#fff' }}>PR</span>}
           </div>
-          <div className="caption" style={{ marginTop: 4 }}>
-            Max {p.maxWeight}kg · Last session volume {p.lastSessionVolume.toLocaleString()}kg · Last performed {new Date(p.lastPerformed).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-          </div>
-          {p.deltaFromLastMonth != null && (
-            <div className="caption" style={{ marginTop: 4 }}>
-              {p.deltaFromLastMonth > 0 ? '+' : ''}{p.deltaFromLastMonth}kg from last month
+          <div className="row" style={{ marginTop: 12, alignItems: 'stretch' }}>
+            <div className="grow">
+              <Stat
+                label="Max weight" value={p.maxWeight} unit="kg"
+                delta={p.deltaFromLastMonth != null ? {
+                  text: `${p.deltaFromLastMonth > 0 ? '+' : ''}${p.deltaFromLastMonth}kg vs last month`,
+                  dir: p.deltaFromLastMonth > 0 ? 'up' : p.deltaFromLastMonth < 0 ? 'down' : undefined,
+                } : undefined}
+              />
             </div>
-          )}
+            <div className="grow"><Stat label="Last volume" value={p.lastSessionVolume.toLocaleString()} unit="kg" /></div>
+          </div>
+          <div className="caption" style={{ marginTop: 8 }}>
+            Last performed {new Date(p.lastPerformed).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+          </div>
         </Card>
       ))}
     </div>
