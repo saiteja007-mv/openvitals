@@ -3,7 +3,7 @@
 > Resume point for the 68-finding UI enhancement pass. Full interactive triage doc (artifact):
 > https://claude.ai/code/artifact/53d663cf-0b0d-4b91-a28b-f5d1dafd59d9
 
-**Progress: Batches A–I committed on `ui-review-batches` — 55 addressed / 68 (13 pending)** (all committed; tsc + build + 66 tests green. Checklist checkboxes below.)
+**Progress: Batches A–J committed on `ui-review-batches` — 62 addressed / 68 (6 pending)** (all committed; tsc + build + 66 tests green. Checklist checkboxes below.)
 
 ## How to resume
 1. `cd ~/consied` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
@@ -22,6 +22,7 @@
 - **Batch E — Exercises** (`src/screens/Exercises.tsx`, `src/theme.css`): skeleton cards on first load + grid dims on re-filter (no more full-grid spinner flash); cards keyboard-accessible (`role/tabIndex/onKeyDown`); honest "Load more · showing N of total"; quiet monochrome dumbbell placeholder (no "no preview" text); modal "No instructions available." fallback; inline search-clear ✕.
 - **Batch F — Trends + Body charts** (`src/components/chart.tsx` NEW, `Trends.tsx`, `Body.tsx`): shared monochrome `CHART`/`AXIS`/`TOOLTIP` (styled Recharts tooltip, one palette source); Trends page-level no-sync Empty guard, `latest · avg` summary per card, dashed "In" line. Body first-run onboarding, `Stat delta` ▲/▼ vs-last, notes shown, `.row-wrap`, save-guard, delete-with-confirm. Deferred: Trends prev-window Δ + per-metric never-logged copy; Body inline edit.
 - **Batches G/H/I — Settings / Food / Workouts** (parallel workflow, 3 disjoint files): **G Settings** — reminder On/Off active pill, styled "Choose backup file…" button, reminders empty state, mobile field-wrap, friendlier microcopy, net-neg token for flags. **H Food** — legible "30g P · 40g C · 12g F" macros everywhere, trash/pencil emoji → monochrome SVG, single primary in Lookup, isolated "Log as" chip, Total-intake kcal hero + macro Stat tiles. **I Workouts** — Progress as Stat tiles (Max weight ▲/▼ vs last month + Last volume), ✓ on logged plan items, Plans empty state, ▸/▾ disclosure chevron, Kind → Select, log table scrolls in-card.
+- **Batch J — Login + Modal/Toast a11y** (`Login.tsx`, `components/UI.tsx`): Login surfaces the real error (not always "Incorrect password"), announces it via `role="alert"` + `aria-invalid`/`aria-describedby`, clears it on retype, lifts the card (`elevated`), gives the wordmark a hero scale + "Sign in to continue." subhead, and uses the `net-neg` token. Modal → `role="dialog" aria-modal aria-labelledby`, Escape-to-close, focus-on-open (won't steal an autoFocus field) + restore-on-close. Toast → `role="status" aria-live="polite"`.
 
 > NOTE: `Empty` now takes an `action?` prop and `Stat` takes a `delta?` prop — the primitives are ready; wiring CTAs / deltas into each screen is part of the pending per-screen items. The `.excard:focus-visible` ring is in place but Exercises cards still need `role="button" tabIndex={0}` + keydown to actually receive focus (see Exercises pending).
 
@@ -89,25 +90,13 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [x] `L/S` `information-design` **Recommendation flags use hardcoded red with no hierarchy** — ✅ Batch G
 
 ### Login
-- [ ] `H/S` `microcopy` **"Incorrect password" is shown for every failure, including server/network errors**
-  - fix: Catch the error and prefer its message: `catch (err) { setError(err instanceof Error && err.message && err.message !== 'login failed' ? err.message : 'Incorrect password') }`. Keep the generic auth wording only as the fallback so a real 401
-  - loc: `src/screens/Login.tsx:18-19`
-- [ ] `M/S` `accessibility` **Login error is invisible to screen readers and unlinked to the input**
-  - fix: Add `role="alert"` to the error div (line 52) so it's announced on appearance, give it an id, and on the Input set `aria-invalid={!!error}` plus `aria-describedby` pointing at that id when error is set. All within the existing `.caption` st
-  - loc: `src/screens/Login.tsx:52`
-- [ ] `M/S` `interaction` **Stale "Incorrect password" stays on screen while the user retypes**
-  - fix: Clear the error as soon as the value changes: in the onChange (line 37) also call `if (error) setError('')`. Cheap, and it keeps the aria-invalid state from lingering on the input too.
-  - loc: `src/screens/Login.tsx:37`
-- [ ] `M/S` `visual` **Login card is white-on-white with only a hairline — it barely reads as a surface**
-  - fix: Lift the card with the existing shadow token instead of adding a new one: pass `className="elevated"` (theme.css:124, `--shadow-1`) to the `<Card>` at Login.tsx:28. Since `.elevated` replaces the inset hairline, combine them so both survive
-  - loc: `src/screens/Login.tsx:28`
-- [ ] `M/S` `empty-state` **Wordmark is app-bar-sized and the screen has no supporting copy — the front door feels like an empty state**
-  - fix: Give the login its own hero scale: bump the wordmark on this screen to a display size (32px/700, matching h1/`display-lg` in DESIGN.md) and add a muted subhead beneath it using the existing `.caption`/`.muted` class, e.g. "Sign in to contin
-  - loc: `src/screens/Login.tsx:29`
+- [x] `H/S` `microcopy` **"Incorrect password" is shown for every failure, including server/network errors** — ✅ Batch J
+- [x] `M/S` `accessibility` **Login error is invisible to screen readers and unlinked to the input** — ✅ Batch J
+- [x] `M/S` `interaction` **Stale "Incorrect password" stays on screen while the user retypes** — ✅ Batch J
+- [x] `M/S` `visual` **Login card is white-on-white with only a hairline — it barely reads as a surface** — ✅ Batch J
+- [x] `M/S` `empty-state` **Wordmark is app-bar-sized and the screen has no supporting copy — the front door feels like an empty state** — ✅ Batch J
 - [x] `M/S` `accessibility` **Show/Hide password toggle is below the 44px minimum tap target on mobile** — ✅ Batch A
-- [ ] `L/S` `consistency` **Error uses a raw hex and 12px caption size instead of a system token**
-  - fix: Reuse the existing class rather than the raw hex: render the error as `<div className="caption net-neg" role="alert">` (dropping the inline `style`), or add a `--error: #b00020` token and point `.net-neg`/`.btn-danger` at it so there's one 
-  - loc: `src/screens/Login.tsx:52`
+- [x] `L/S` `consistency` **Error uses a raw hex and 12px caption size instead of a system token** — ✅ Batch J
 
 ### App shell + navigation
 - [x] `H/M` `visual` **Colored emoji nav icons break the strict-monochrome system** — ✅ Batch B (monochrome SVG icons, currentColor)
@@ -138,5 +127,4 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [x] `M/S` `accessibility` **Stat unit rendered in --mute (low contrast)** — ✅ Batch A (`--mute` → `--body`)
 - [x] `H/M` `information-design` **Stat can't show a delta/trend** — ✅ Batch A (`Stat delta` slot; used in Today/Body/Trends)
 - [x] `M/S` `accessibility` **Icon buttons and small pills are 36px (sub-44px)** — ✅ Batch A (`@media(pointer:coarse)` 44px)
-- [ ] `H/M` `accessibility` **Modal and Toast lack dialog/live-region semantics** — TODO
-  - fix: Modal → `role="dialog" aria-modal="true"`, `aria-labelledby` the title, Escape-to-close, focus on mount + restore on close. Toast → `role="status" aria-live="polite"`. loc: `src/components/UI.tsx` Modal/Toast.
+- [x] `H/M` `accessibility` **Modal and Toast lack dialog/live-region semantics** — TODO — ✅ Batch J

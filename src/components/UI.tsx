@@ -50,11 +50,21 @@ export function Loading() {
 }
 
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const ref = React.useRef<HTMLDivElement>(null)
+  const titleId = React.useId()
+  React.useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null
+    // Don't steal focus from a field that already grabbed it (autoFocus inputs).
+    if (!ref.current?.contains(document.activeElement)) ref.current?.focus()
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey); prev?.focus?.() }
+  }, [onClose])
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={ref} onClick={(e) => e.stopPropagation()}>
         <div className="row between" style={{ marginBottom: 16 }}>
-          <h3>{title}</h3>
+          <h3 id={titleId}>{title}</h3>
           <button className="iconbtn" onClick={onClose} aria-label="Close">✕</button>
         </div>
         {children}
@@ -64,7 +74,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 }
 
 export function Toast({ message }: { message: string }) {
-  return <div className="toast">{message}</div>
+  return <div className="toast" role="status" aria-live="polite">{message}</div>
 }
 
 export function useToast() {

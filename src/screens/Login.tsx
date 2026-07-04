@@ -15,8 +15,8 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
     try {
       await api.login(password)
       onSuccess()
-    } catch {
-      setError('Incorrect password')
+    } catch (err) {
+      setError(err instanceof Error && err.message && err.message !== 'login failed' ? err.message : 'Incorrect password')
     } finally {
       setLoading(false)
     }
@@ -25,8 +25,9 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <form onSubmit={submit} style={{ width: '100%', maxWidth: 360 }}>
-        <Card>
-          <div className="brand" style={{ marginBottom: 20 }}>Consied<span style={{ color: 'var(--mute)' }}>.</span></div>
+        <Card className="elevated">
+          <div className="brand" style={{ fontSize: 32, letterSpacing: '-1px' }}>Consied<span style={{ color: 'var(--mute)' }}>.</span></div>
+          <div className="caption" style={{ marginBottom: 20 }}>Sign in to continue.</div>
           <div className="stack">
             <Field label="Password">
               <div className="password-input-wrap">
@@ -34,9 +35,11 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
                   type={showPassword ? 'text' : 'password'}
                   autoFocus
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => { setPassword(e.target.value); if (error) setError('') }}
                   placeholder="Enter password"
                   autoComplete="current-password"
+                  aria-invalid={!!error}
+                  aria-describedby={error ? 'login-error' : undefined}
                 />
                 <button
                   type="button"
@@ -49,7 +52,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
                 </button>
               </div>
             </Field>
-            {error && <div className="caption" style={{ color: '#b00020' }}>{error}</div>}
+            {error && <div id="login-error" className="caption net-neg" role="alert">{error}</div>}
             <Button type="submit" variant="primary" loading={loading} disabled={!password}>Log in</Button>
           </div>
         </Card>
