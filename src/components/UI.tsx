@@ -9,7 +9,7 @@ export function Button({ variant = 'primary', size = 'md', loading, children, cl
   const cls = `btn btn-${variant} ${size === 'sm' ? 'btn-sm' : ''} ${className}`.trim()
   return (
     <button className={cls} disabled={disabled || loading} {...rest}>
-      {loading && <span className="spin" />}
+      {loading && <span className={`spin${variant === 'primary' ? '' : ' spin-dark'}`} />}
       {children}
     </button>
   )
@@ -20,11 +20,12 @@ export function Card({ children, soft, dark, className = '', onClick }: { childr
   return <div className={`${base} ${className}`.trim()} onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>{children}</div>
 }
 
-export function Stat({ label, value, unit }: { label: string; value: React.ReactNode; unit?: string }) {
+export function Stat({ label, value, unit, delta }: { label: string; value: React.ReactNode; unit?: string; delta?: { text: string; dir?: 'up' | 'down' } }) {
   return (
     <div className="stat">
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value ?? '—'}{unit && value != null ? <span className="stat-unit">{unit}</span> : null}</div>
+      {delta && <div className="stat-delta">{delta.dir === 'up' ? '▲ ' : delta.dir === 'down' ? '▼ ' : ''}{delta.text}</div>}
     </div>
   )
 }
@@ -40,8 +41,8 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select className="select" {...props} />
 }
 
-export function Empty({ children }: { children: React.ReactNode }) {
-  return <div className="empty">{children}</div>
+export function Empty({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return <div className="empty">{children}{action ? <div className="empty-action">{action}</div> : null}</div>
 }
 
 export function Loading() {
