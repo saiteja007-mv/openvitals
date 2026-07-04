@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api, todayISO } from '../api'
 import type { DaySummary, HealthResponse, Settings, HabitStatus } from '../types'
 import { Button, Card, Stat, Loading, Empty, Field, Input, useToast } from '../components/UI'
 
 const hm = (min: number | null) => (min == null ? null : `${Math.floor(min / 60)}h ${min % 60}m`)
+const fmtDay = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
 
 function GoalRow({ label, current, target, fmt }: { label: string; current: number | null; target: number | null; fmt: (v: number) => string }) {
   if (target == null) return null
@@ -26,16 +28,18 @@ function HabitStreakCard({ habit, onToggle }: { habit: HabitStatus; onToggle: (n
   const pct = days.length ? Math.round((doneCount / windowDays) * 100) : 0
   return (
     <div style={{ padding: '14px 0', borderTop: '1px solid var(--line)' }}>
-      <label className="row between" style={{ gap: 12, alignItems: 'flex-start', cursor: 'pointer' }}>
-        <span className="row" style={{ gap: 10, minWidth: 0 }}>
-          <input type="checkbox" checked={habit.done} onChange={() => onToggle(habit.name)} style={{ width: 22, height: 22, marginTop: 1 }} />
-          <span style={{ minWidth: 0 }}>
-            <strong style={{ display: 'block', overflowWrap: 'anywhere' }}>{habit.name}</strong>
-            <span className="caption">{habit.streak} day streak · {doneCount}/{windowDays} days in this window</span>
-          </span>
+      <div className="row between" style={{ gap: 12, alignItems: 'flex-start' }}>
+        <span style={{ minWidth: 0 }}>
+          <strong style={{ display: 'block', overflowWrap: 'anywhere' }}>{habit.name}</strong>
+          <span className="caption">{habit.streak} day streak · {doneCount}/{windowDays} days in this window</span>
         </span>
-        <span className="tag" style={{ background: habit.done ? 'var(--black)' : undefined, color: habit.done ? '#fff' : undefined }}>🔥 {habit.streak}d</span>
-      </label>
+        <span className="row" style={{ gap: 8, flexShrink: 0, alignItems: 'center' }}>
+          <span className="tag" style={{ background: habit.done ? 'var(--black)' : undefined, color: habit.done ? '#fff' : undefined }}>🔥 {habit.streak}d</span>
+          <Button variant={habit.done ? 'secondary' : 'primary'} size="sm" onClick={() => onToggle(habit.name)} aria-pressed={habit.done}>
+            {habit.done ? '✓ Logged' : 'Log'}
+          </Button>
+        </span>
+      </div>
       <div style={{ marginTop: 12 }}>
         <div style={{ height: 8, borderRadius: 999, background: 'var(--canvas-soft)', overflow: 'hidden' }} aria-label={`${habit.name} ${pct}% complete over ${windowDays} days`}>
           <div style={{ height: '100%', width: `${pct}%`, borderRadius: 999, background: 'var(--black)' }} />
@@ -66,6 +70,7 @@ export default function Today() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const { show, node } = useToast()
+  const nav = useNavigate()
 
   const load = async () => {
     setLoading(true)
@@ -85,7 +90,7 @@ export default function Today() {
   const toggleHabit = async (name: string) => {
     const cur = habits.find((h) => h.name === name)
     const next = !cur?.done
-    setHabits((list) => list.map((h) => h.name === name ? { ...h, done: next, streak: next ? Math.max(1, h.streak) : Math.max(0, h.streak - 1) } : h))
+    setHabits((list) => list.map((h) => h.name === name ? { ...h, done: next, streak: next ? h.streak + 1 : 0 } : h))
     try { await api.setHabit(date, name, next); await loadHabits() }
     catch { await loadHabits(); show('Could not save habit') }
   }
@@ -134,7 +139,7 @@ export default function Today() {
   if (loading || !sum) return <Loading />
   const h = sum.health
   const b = sum.balance
-  const netCls = b.net > 0 ? 'net-neg' : 'net-pos'
+  const hasIntake = b.in > 0
   const hasGoals = settings && [settings.calorie_goal, settings.protein_goal, settings.steps_goal, settings.sleep_goal_min, settings.weight_goal_kg].some((v) => v != null)
 
   return (
@@ -145,12 +150,12 @@ export default function Today() {
       </div>
       <div className="row" style={{ marginTop: 8, gap: 10 }}>
         <button className="iconbtn" onClick={() => shiftDay(-1)} aria-label="Previous day">‹</button>
-        <span className="caption">{sum.date}</span>
+        <span className="caption">{fmtDay(sum.date)}</span>
         <button className="iconbtn" onClick={() => shiftDay(1)} disabled={date >= today} style={{ opacity: date >= today ? 0.4 : 1 }} aria-label="Next day">›</button>
         {date !== today && <button className="chip" onClick={() => setDate(today)}>Today</button>}
       </div>
       {date === today && h.asOf && h.asOf !== sum.date && (
-        <div className="caption" style={{ marginTop: 6 }}>Health data as of {h.asOf} (today still syncing)</div>
+        <div className="caption" style={{ marginTop: 6 }}>Health data as of {fmtDay(h.asOf)} (today still syncing)</div>
       )}
 
       {stale && <div className="banner" style={{ marginTop: 16 }}>Showing last cached data — OpenFit didn’t refresh. Tap Sync to retry.</div>}
@@ -224,21 +229,25 @@ export default function Today() {
           <div className="row between">
             <div>
               <div className="stat-label">Calorie balance</div>
-              <div className="stat-value">
-                <span className={netCls}>{b.net > 0 ? '+' : ''}{b.net.toLocaleString()}</span>
-                <span className="stat-unit">net kcal</span>
-              </div>
+              {hasIntake ? (
+                <div className="stat-value">
+                  {b.net > 0 ? '+' : ''}{b.net.toLocaleString()}
+                  <span className="stat-unit">net kcal</span>
+                </div>
+              ) : (
+                <div className="caption" style={{ marginTop: 6 }}>Log a meal to see your calorie balance.</div>
+              )}
             </div>
             <div className="stack" style={{ textAlign: 'right', gap: 2 }}>
               <div className="caption">In {b.in.toLocaleString()} · Out {b.out.toLocaleString()}</div>
-              <div className="caption">{b.net > 0 ? 'Surplus' : 'Deficit'}</div>
+              {hasIntake && <div className="caption">{b.net > 0 ? '▲ Surplus' : '▼ Deficit'}</div>}
             </div>
           </div>
         </Card>
       </div>
 
       <h3 className="section-title">Workouts</h3>
-      {sum.workouts.length === 0 ? <Empty>No workouts logged this day.</Empty> : (
+      {sum.workouts.length === 0 ? <Empty action={<Button variant="secondary" size="sm" onClick={() => nav('/workouts')}>Log a workout</Button>}>No workouts logged this day.</Empty> : (
         <div className="stack">
           {sum.workouts.map((w) => (
             <Card key={w.id} className="card-tight">
@@ -254,7 +263,7 @@ export default function Today() {
       )}
 
       <h3 className="section-title">Meals</h3>
-      {sum.meals.length === 0 ? <Empty>No meals logged this day.</Empty> : (
+      {sum.meals.length === 0 ? <Empty action={<Button variant="secondary" size="sm" onClick={() => nav('/food')}>Log a meal</Button>}>No meals logged this day.</Empty> : (
         <div className="stack">
           {sum.meals.map((m) => (
             <Card key={m.id} className="card-tight">
