@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { api, todayISO, fileToDataUrl } from '../api'
 import type { BodyMetric, Settings } from '../types'
@@ -121,6 +121,7 @@ function EntryForm({ onSaved }: { onSaved: () => void }) {
   const [notes, setNotes] = useState('')
   const [photo, setPhoto] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
+  const photoRef = useRef<HTMLInputElement>(null)
 
   const save = async () => {
     setSaving(true)
@@ -148,7 +149,14 @@ function EntryForm({ onSaved }: { onSaved: () => void }) {
           <Field label="Arm (cm)"><Input type="number" value={arm} onChange={(e) => setArm(e.target.value)} /></Field>
         </div>
         <Field label="Notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-        <Field label="Progress photo (private, optional)"><input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} /></Field>
+        <div className="field">
+          <span className="label">Progress photo (private, optional)</span>
+          <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
+          <div className="row-wrap">
+            <Button type="button" variant="subtle" size="sm" onClick={() => photoRef.current?.click()}>{photo ? 'Change photo' : 'Add photo'}</Button>
+            {photo && <span className="caption">{photo.name}</span>}
+          </div>
+        </div>
         <Button variant="primary" onClick={save} loading={saving} disabled={!weight && !bodyFat && !waist && !chest && !arm && !photo}>Save entry</Button>
       </div>
     </Card>

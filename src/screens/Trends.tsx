@@ -127,18 +127,18 @@ export default function Trends() {
             {page !== 0 && <button className="chip" onClick={() => setPage(0)}>Latest</button>}
           </div>
 
-          <ChartCard title="Steps" summary={summarize(win(stepsAll), '')}>{bar(win(stepsAll), 'steps')}</ChartCard>
+          <ChartCard title="Steps" summary={summarize(win(stepsAll), '')}>{bar(win(stepsAll), 'steps', stepsAll)}</ChartCard>
           <ChartCard title="Calories — in vs out">
             {(() => { const d = calAll.filter((c) => inWin(c.date)); return d.some((x) => x.In || x.Out)
               ? <ResponsiveContainer width="100%" height={220}><LineChart data={d}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={44} /><Tooltip {...TOOLTIP} /><Legend /><Line type="monotone" dataKey="Out" stroke={CHART.ink} strokeWidth={2} dot={false} /><Line type="monotone" dataKey="In" stroke={CHART.mid} strokeWidth={2} strokeDasharray="5 3" dot={false} /></LineChart></ResponsiveContainer>
               : <NoData /> })()}
           </ChartCard>
-          <ChartCard title="Resting heart rate" summary={summarize(win(restHrAll), 'bpm')}>{line(win(restHrAll), 'bpm', true)}</ChartCard>
-          <ChartCard title="Heart-rate variability (ms)" summary={summarize(win(hrvAll), 'ms')}>{line(win(hrvAll), 'ms')}</ChartCard>
-          <ChartCard title="Blood oxygen (SpO₂ %)" summary={summarize(win(spo2All), '%')}>{line(win(spo2All), '%', true)}</ChartCard>
-          <ChartCard title="Sleep (hours)" summary={summarize(win(sleepAll), 'h')}>{bar(win(sleepAll), 'hours')}</ChartCard>
-          <ChartCard title="Distance (km)" summary={summarize(win(distAll), 'km')}>{line(win(distAll), 'km')}</ChartCard>
-          <ChartCard title="Weight (kg)" summary={summarize(win(weightAll), 'kg')}>{line(win(weightAll), 'kg', true)}</ChartCard>
+          <ChartCard title="Resting heart rate" summary={summarize(win(restHrAll), 'bpm')}>{line(win(restHrAll), 'bpm', true, restHrAll)}</ChartCard>
+          <ChartCard title="Heart-rate variability (ms)" summary={summarize(win(hrvAll), 'ms')}>{line(win(hrvAll), 'ms', false, hrvAll)}</ChartCard>
+          <ChartCard title="Blood oxygen (SpO₂ %)" summary={summarize(win(spo2All), '%')}>{line(win(spo2All), '%', true, spo2All)}</ChartCard>
+          <ChartCard title="Sleep (hours)" summary={summarize(win(sleepAll), 'h')}>{bar(win(sleepAll), 'hours', sleepAll)}</ChartCard>
+          <ChartCard title="Distance (km)" summary={summarize(win(distAll), 'km')}>{line(win(distAll), 'km', false, distAll)}</ChartCard>
+          <ChartCard title="Weight (kg)" summary={summarize(win(weightAll), 'kg')}>{line(win(weightAll), 'kg', true, weightAll)}</ChartCard>
         </>
       )}
     </div>
@@ -203,12 +203,12 @@ function WeeklyTab() {
   )
 }
 
-function bar(data: Pt[], name: string) {
-  if (!data.length) return <NoData />
+function bar(data: Pt[], name: string, full?: Pt[]) {
+  if (!data.length) return <NoData ever={!!full && full.length > 0} />
   return <ResponsiveContainer width="100%" height={200}><BarChart data={data}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={40} /><Tooltip {...TOOLTIP} /><Bar dataKey="value" name={name} fill={CHART.ink} radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer>
 }
-function line(data: Pt[], name: string, tight = false) {
-  if (!data.length) return <NoData />
+function line(data: Pt[], name: string, tight = false, full?: Pt[]) {
+  if (!data.length) return <NoData ever={!!full && full.length > 0} />
   return <ResponsiveContainer width="100%" height={200}><LineChart data={data}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={42} domain={tight ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} /><Tooltip {...TOOLTIP} /><Line type="monotone" dataKey="value" name={name} stroke={CHART.ink} strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer>
 }
 // Latest reading + window average, so each card carries a comparable number, not just a shape.
@@ -226,4 +226,4 @@ function ChartCard({ title, summary, children }: { title: string; summary?: stri
     {children}
   </Card></div>
 }
-function NoData() { return <Empty>No data for this range.</Empty> }
+function NoData({ ever = true }: { ever?: boolean }) { return <Empty>{ever ? 'No data for this range.' : 'No data logged yet.'}</Empty> }

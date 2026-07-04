@@ -47,7 +47,12 @@ export default function App() {
     return () => window.removeEventListener('consied:unauthorized', onUnauthed)
   }, [])
 
-  if (authed === null) return <div className="center-load"><span className="spin spin-dark" /></div>
+  if (authed === null) return (
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+      <div className="brand" style={{ fontSize: 28 }}>Consied<span style={{ color: 'var(--mute)' }}>.</span></div>
+      <span className="spin spin-dark" />
+    </div>
+  )
   if (!authed) return <Login onSuccess={() => setAuthed(true)} />
 
   return (
@@ -61,7 +66,12 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
-        <NavLink to="/settings" className="iconbtn" aria-label="Settings">⚙</NavLink>
+        <div className="row" style={{ gap: 8 }}>
+          <NavLink to="/trends" className="iconbtn only-mobile" aria-label="Trends">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS.chart}</svg>
+          </NavLink>
+          <NavLink to="/settings" className="iconbtn" aria-label="Settings">⚙</NavLink>
+        </div>
       </header>
 
       <main className="container">
@@ -77,7 +87,7 @@ export default function App() {
       </main>
 
       <nav className="bottomnav">
-        {NAV.map((n) => (
+        {NAV.slice(0, 5).map((n) => (
           <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => 'bnitem' + (isActive ? ' active' : '')}>
             <NavIcon name={n.icon} />
             {n.label}

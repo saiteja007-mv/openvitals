@@ -80,6 +80,9 @@ input, select, textarea { font-family: var(--font); }
 .brand span { color: var(--mute); }
 .topnav { display: none; gap: var(--s-xs); }
 @media (min-width: 720px) { .topnav { display: flex; } }
+/* shown only on mobile (where topnav is hidden) — e.g. Trends moved out of the 5-tab bottom bar */
+.only-mobile { display: inline-flex; }
+@media (min-width: 720px) { .only-mobile { display: none; } }
 .navlink {
   padding: var(--s-sm) var(--s-lg); border-radius: var(--r-pill);
   font-size: 14px; font-weight: 500; color: var(--ink); background: transparent; cursor: pointer;

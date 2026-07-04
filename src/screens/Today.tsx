@@ -6,6 +6,9 @@ import { Button, Card, Stat, Loading, Empty, Field, Input, useToast } from '../c
 
 const hm = (min: number | null) => (min == null ? null : `${Math.floor(min / 60)}h ${min % 60}m`)
 const fmtDay = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+// Progress toward a Settings goal, shown under the stat value (links the two sections; no color).
+const toGoal = (cur: number | null | undefined, tgt: number | null | undefined, fmt: (v: number) => string): { text: string; dir?: 'up' } | undefined =>
+  (tgt == null || cur == null) ? undefined : (cur >= tgt ? { text: 'goal reached', dir: 'up' } : { text: `${fmt(tgt - cur)} to goal` })
 
 function GoalRow({ label, current, target, fmt }: { label: string; current: number | null; target: number | null; fmt: (v: number) => string }) {
   if (target == null) return null
@@ -136,7 +139,9 @@ export default function Today() {
     finally { setSyncing(false) }
   }
 
-  if (loading || !sum) return <Loading />
+  // ponytail: only block on the very first load; on date change keep showing current data
+  // while the next day fetches (no full-page collapse, header + day-nav stay mounted).
+  if (!sum) return <Loading />
   const h = sum.health
   const b = sum.balance
   const hasIntake = b.in > 0
@@ -150,7 +155,7 @@ export default function Today() {
       </div>
       <div className="row" style={{ marginTop: 8, gap: 10 }}>
         <button className="iconbtn" onClick={() => shiftDay(-1)} aria-label="Previous day">‹</button>
-        <span className="caption">{fmtDay(sum.date)}</span>
+        <span className="caption" style={{ opacity: loading ? 0.5 : 1 }}>{fmtDay(date)}</span>
         <button className="iconbtn" onClick={() => shiftDay(1)} disabled={date >= today} style={{ opacity: date >= today ? 0.4 : 1 }} aria-label="Next day">›</button>
         {date !== today && <button className="chip" onClick={() => setDate(today)}>Today</button>}
       </div>
@@ -210,10 +215,10 @@ export default function Today() {
       </div>
 
       <div className="grid grid-stats" style={{ marginTop: 16 }}>
-        <Stat label="Steps" value={h.steps?.toLocaleString() ?? null} />
+        <Stat label="Steps" value={h.steps?.toLocaleString() ?? null} delta={toGoal(h.steps, settings?.steps_goal, (v) => Math.round(v).toLocaleString())} />
         <Stat label="Calories out" value={h.caloriesOut?.toLocaleString() ?? null} unit="kcal" />
         <Stat label="Resting HR" value={h.restingHr ?? null} unit="bpm" />
-        <Stat label="Sleep" value={hm(h.sleepMin)} />
+        <Stat label="Sleep" value={hm(h.sleepMin)} delta={toGoal(h.sleepMin, settings?.sleep_goal_min, (v) => hm(Math.round(v)) ?? '')} />
         <Stat label="Sleep eff." value={h.sleepEfficiency ?? null} unit="%" />
         <Stat label="HRV" value={h.hrv ?? null} unit="ms" />
         <Stat label="SpO₂" value={h.spo2 ?? null} unit="%" />
