@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts'
 import { api, todayISO } from '../api'
-import type { Meal, WeeklySummary } from '../types'
+import type { Meal, WeeklySummary, BodyMetric } from '../types'
 import { Card, Stat, Loading, Empty } from '../components/UI'
 import { CHART, AXIS, TOOLTIP } from '../components/chart'
 
@@ -47,12 +47,13 @@ export default function Trends() {
   const [page, setPage] = useState(0) // 0 = most recent window; higher = older
   const [health, setHealth] = useState<any>(null)
   const [meals, setMeals] = useState<Meal[]>([])
+  const [bodyMetrics, setBodyMetrics] = useState<BodyMetric[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    Promise.all([api.getHealth(), api.listMeals({})])
-      .then(([h, m]) => { setHealth(h.data); setMeals(m) })
+    Promise.all([api.getHealth(), api.listMeals({}), api.listBodyMetrics({})])
+      .then(([h, m, bm]) => { setHealth(h.data); setMeals(m); setBodyMetrics(bm) })
       .finally(() => setLoading(false))
   }, [])
 
@@ -66,7 +67,14 @@ export default function Trends() {
   const spo2All = useMemo(() => toSeries(mt, (r) => r.spo2), [health])
   const distAll = useMemo(() => toSeries(mt, (r) => r.distanceKm), [health])
   const sleepAll = useMemo(() => sleepSeries(ep.sleepTrend?.sleep), [health])
-  const weightAll = useMemo(() => toSeries(ep.bodyWeight?.weight, (r) => r.weight), [health])
+  // Weight comes from two places: Google Health sync (ep.bodyWeight) and the app's own Body
+  // entries (body_metrics). Merge both, with manual entries taking precedence on a shared date.
+  const weightAll = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const p of toSeries(ep.bodyWeight?.weight, (r) => r.weight)) m[p.date] = p.value
+    for (const bm of bodyMetrics) if (bm.weight_kg != null) m[bm.date] = bm.weight_kg as number
+    return Object.keys(m).sort().map((date) => ({ date, value: m[date], label: shortDate(date) }))
+  }, [health, bodyMetrics])
   const calAll = useMemo(() => {
     const calIn: Record<string, number> = {}
     meals.forEach((m) => { const d = (m.eaten_at || '').slice(0, 10); calIn[d] = (calIn[d] || 0) + (m.calories || 0) })
@@ -81,13 +89,13 @@ export default function Trends() {
     for (const s of allSeries) if (s.length && s[s.length - 1].date > m) m = s[s.length - 1].date
     for (const c of calAll) if (c.date > m) m = c.date
     return m
-  }, [health, meals])
+  }, [health, meals, bodyMetrics])
   const minDate = useMemo(() => {
     let m = ''
     for (const s of allSeries) if (s.length && (!m || s[0].date < m)) m = s[0].date
     for (const c of calAll) if (!m || c.date < m) m = c.date
     return m
-  }, [health, meals])
+  }, [health, meals, bodyMetrics])
 
   const end = maxDate ? shiftDate(maxDate, -page * days) : ''
   const start = end ? shiftDate(end, -(days - 1)) : ''
@@ -209,7 +217,7 @@ function bar(data: Pt[], name: string, full?: Pt[]) {
 }
 function line(data: Pt[], name: string, tight = false, full?: Pt[]) {
   if (!data.length) return <NoData ever={!!full && full.length > 0} />
-  return <ResponsiveContainer width="100%" height={200}><LineChart data={data}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={42} domain={tight ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} /><Tooltip {...TOOLTIP} /><Line type="monotone" dataKey="value" name={name} stroke={CHART.ink} strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer>
+  return <ResponsiveContainer width="100%" height={200}><LineChart data={data}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={42} domain={tight ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} /><Tooltip {...TOOLTIP} /><Line type="monotone" dataKey="value" name={name} stroke={CHART.ink} strokeWidth={2} dot={data.length === 1} /></LineChart></ResponsiveContainer>
 }
 // Latest reading + window average, so each card carries a comparable number, not just a shape.
 function summarize(pts: Pt[], unit: string): string | null {
