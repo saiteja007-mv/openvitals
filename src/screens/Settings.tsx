@@ -115,7 +115,7 @@ function RemindersSection({ reminders, onChange, show }: { reminders: Reminder[]
   }
 
   const toggle = async (r: Reminder) => { await api.updateReminder(r.id, { enabled: r.enabled ? 0 : 1 }); onChange() }
-  const del = async (id: number) => { await api.deleteReminder(id); onChange() }
+  const del = async (id: number) => { if (!confirm('Delete this reminder?')) return; await api.deleteReminder(id); onChange() }
 
   const checkNow = async () => {
     setChecking(true)
@@ -185,6 +185,7 @@ function ExportSection({ show }: { show: (m: string) => void }) {
   const exportCsv = () => window.open(api.exportCsvUrl(table), '_blank')
 
   const restore = async (file: File) => {
+    if (!confirm('Replace ALL current data (workouts, meals, body metrics, habits, settings, plans) with this backup? This cannot be undone.')) return
     setRestoring(true)
     try {
       const data = JSON.parse(await file.text())

@@ -51,7 +51,7 @@ function LogTab({ show }: { show: (m: string) => void }) {
   }
   useEffect(load, [date])
 
-  const del = async (id: number) => { await api.deleteMeal(id); load(); show('Deleted') }
+  const del = async (id: number) => { if (!confirm('Delete this meal?')) return; await api.deleteMeal(id); load(); show('Deleted') }
   const totals = items.reduce((a, m) => ({
     cal: a.cal + (m.calories || 0), p: a.p + (m.protein_g || 0), c: a.c + (m.carbs_g || 0), f: a.f + (m.fat_g || 0),
   }), { cal: 0, p: 0, c: 0, f: 0 })
@@ -203,7 +203,7 @@ function TemplatesTab({ show }: { show: (m: string) => void }) {
     } finally { setLogging(null) }
   }
 
-  const del = async (id: number) => { await api.deleteMealRecipe(id); load(); show('Template deleted') }
+  const del = async (id: number) => { if (!confirm('Delete this template?')) return; await api.deleteMealRecipe(id); load(); show('Template deleted') }
 
   return (
     <div>

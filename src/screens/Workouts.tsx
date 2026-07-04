@@ -35,7 +35,7 @@ function LogTab() {
   }
   useEffect(load, [])
 
-  const del = async (id: number) => { await api.deleteWorkout(id); load(); show('Deleted') }
+  const del = async (id: number) => { if (!confirm('Delete this workout?')) return; await api.deleteWorkout(id); load(); show('Deleted') }
 
   return (
     <div>
@@ -135,7 +135,7 @@ function PlansTab() {
   const load = () => { setLoading(true); api.listWorkoutPlans().then(setPlans).finally(() => setLoading(false)) }
   useEffect(load, [])
 
-  const del = async (id: number) => { await api.deleteWorkoutPlan(id); load(); show('Plan deleted') }
+  const del = async (id: number) => { if (!confirm('Delete this plan and all its exercises?')) return; await api.deleteWorkoutPlan(id); load(); show('Plan deleted') }
 
   return (
     <div>
