@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, downloadJson } from '../api'
 import type { Settings as SettingsType, Reminder, Recommendation } from '../types'
-import { Button, Card, Field, Input, Select, Loading, useToast } from '../components/UI'
+import { Button, Card, Field, Input, Select, Empty, Loading, useToast } from '../components/UI'
 
 const CSV_TABLES = ['workouts', 'meals', 'meal_recipes', 'body_metrics', 'habits']
 
@@ -31,7 +31,7 @@ export default function SettingsPage() {
           <Card soft>
             <div className="stat-label">Smart recommendation</div>
             <div style={{ marginTop: 8 }}>{rec.message || 'Log a bit more data to get a recommendation.'}</div>
-            {rec.flags.map((f, i) => <div key={i} className="caption" style={{ marginTop: 6, color: '#b00020' }}>{f}</div>)}
+            {rec.flags.map((f, i) => <div key={i} className="caption net-neg" style={{ marginTop: 6 }}>{f}</div>)}
             <div className="caption" style={{ marginTop: 8 }}>{rec.disclaimer}</div>
           </Card>
         </div>
@@ -78,15 +78,15 @@ function GoalsForm({ settings, onSaved }: { settings: SettingsType; onSaved: (s:
   return (
     <Card soft>
       <div className="stack">
-        <div className="row">
+        <div className="row-wrap">
           <Field label="Calorie goal (kcal)"><Input type="number" value={f.calorie_goal} onChange={(e) => setF({ ...f, calorie_goal: e.target.value })} /></Field>
           <Field label="Protein goal (g)"><Input type="number" value={f.protein_goal} onChange={(e) => setF({ ...f, protein_goal: e.target.value })} /></Field>
         </div>
-        <div className="row">
+        <div className="row-wrap">
           <Field label="Steps goal"><Input type="number" value={f.steps_goal} onChange={(e) => setF({ ...f, steps_goal: e.target.value })} /></Field>
           <Field label="Sleep goal (min)"><Input type="number" value={f.sleep_goal_min} onChange={(e) => setF({ ...f, sleep_goal_min: e.target.value })} /></Field>
         </div>
-        <div className="row">
+        <div className="row-wrap">
           <Field label="Weight goal (kg)"><Input type="number" value={f.weight_goal_kg} onChange={(e) => setF({ ...f, weight_goal_kg: e.target.value })} /></Field>
           <Field label="Height (cm, for BMI)"><Input type="number" value={f.height_cm} onChange={(e) => setF({ ...f, height_cm: e.target.value })} /></Field>
         </div>
@@ -127,40 +127,44 @@ function RemindersSection({ reminders, onChange, show }: { reminders: Reminder[]
 
   return (
     <div>
-      {reminders.length > 0 && (
+      {reminders.length > 0 ? (
         <div className="stack" style={{ marginBottom: 12 }}>
           {reminders.map((r) => (
             <Card key={r.id} className="card-tight">
               <div className="row between">
                 <div>
                   <strong style={{ textTransform: 'capitalize' }}>{r.kind}</strong>
-                  <div className="caption">{r.channel} · {r.time_of_day} · {r.target ? 'configured' : 'no webhook set — will show as not-configured'}</div>
+                  <div className="caption">{r.channel} · {r.time_of_day} · {r.target ? 'configured' : 'Local only — no delivery channel set.'}</div>
                 </div>
                 <div className="row" style={{ gap: 6 }}>
-                  <button className="chip" onClick={() => toggle(r)}>{r.enabled ? 'On' : 'Off'}</button>
+                  <button className={`chip ${r.enabled ? 'active' : ''}`} aria-pressed={!!r.enabled} onClick={() => toggle(r)}>{r.enabled ? 'On' : 'Off'}</button>
                   <button className="iconbtn" onClick={() => del(r.id)} aria-label="Delete">🗑</button>
                 </div>
               </div>
             </Card>
           ))}
         </div>
+      ) : (
+        <div style={{ marginBottom: 12 }}>
+          <Empty>No reminders yet — add one below to get a nudge.</Empty>
+        </div>
       )}
 
       <Card soft>
         <div className="stack">
-          <div className="row">
+          <div className="row-wrap">
             <Field label="Reminder"><Input value={kind} onChange={(e) => setKind(e.target.value)} placeholder="e.g. water, weigh-in" /></Field>
             <Field label="Time"><Input type="time" value={time} onChange={(e) => setTime(e.target.value)} /></Field>
           </div>
-          <div className="row">
+          <div className="row-wrap">
             <Field label="Channel">
               <Select value={channel} onChange={(e) => setChannel(e.target.value as 'slack' | 'telegram')}>
                 <option value="slack">Slack</option>
                 <option value="telegram">Telegram</option>
               </Select>
             </Field>
-            <Field label={channel === 'slack' ? 'Webhook URL' : 'botToken:chatId'}>
-              <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="optional — leave blank to just track locally" />
+            <Field label={channel === 'slack' ? 'Webhook URL' : 'Bot token & chat ID'}>
+              <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder={channel === 'slack' ? 'optional — leave blank to just track locally' : 'optional — botToken:chatId'} />
             </Field>
           </div>
           <div className="row">
@@ -176,6 +180,8 @@ function RemindersSection({ reminders, onChange, show }: { reminders: Reminder[]
 function ExportSection({ show }: { show: (m: string) => void }) {
   const [table, setTable] = useState(CSV_TABLES[0])
   const [restoring, setRestoring] = useState(false)
+  const [fileName, setFileName] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const exportJson = async () => {
     const data = await api.exportJson()
@@ -206,12 +212,17 @@ function ExportSection({ show }: { show: (m: string) => void }) {
           </Select>
           <Button variant="secondary" onClick={exportCsv}>Download CSV</Button>
         </div>
-        <Field label="Restore from backup">
+        <div className="stack">
+          <span className="label">Restore from backup</span>
           <input
-            type="file" accept="application/json" disabled={restoring}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) restore(f); e.target.value = '' }}
+            ref={fileRef} type="file" accept="application/json" disabled={restoring} style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFileName(f.name); restore(f) } e.target.value = '' }}
           />
-        </Field>
+          <div className="row-wrap">
+            <Button variant="secondary" loading={restoring} onClick={() => fileRef.current?.click()}>Choose backup file…</Button>
+            {fileName && <span className="caption">{fileName}</span>}
+          </div>
+        </div>
         <div className="caption">Restoring replaces existing workouts, meals, templates, body metrics, habits, settings and workout plans with the backup's contents.</div>
       </div>
     </Card>
