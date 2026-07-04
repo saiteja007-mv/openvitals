@@ -217,6 +217,7 @@ function TemplatesTab({ show }: { show: (m: string) => void }) {
   const [recipes, setRecipes] = useState<MealRecipe[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<MealRecipe | 'new' | null>(null)
+  const [detail, setDetail] = useState<MealRecipe | null>(null)
   const [logging, setLogging] = useState<{ id: number; type: string } | null>(null)
 
   const load = () => { setLoading(true); api.listMealRecipes().then(setRecipes).finally(() => setLoading(false)) }
@@ -248,7 +249,9 @@ function TemplatesTab({ show }: { show: (m: string) => void }) {
           {recipes.map((r) => (
             <Card key={r.id} className="card-tight">
               <div className="row between">
-                <div>
+                <div role="button" tabIndex={0} onClick={() => setDetail(r)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(r) } }}
+                  style={{ cursor: 'pointer', minWidth: 0, flex: 1 }} aria-label={`${r.name} nutrition details`}>
                   <strong>{r.name}</strong>
                   <div className="caption">{[`${r.calories ?? 0} kcal`, macroLine(r.protein_g, r.carbs_g, r.fat_g)].filter(Boolean).join(' · ')}</div>
                 </div>
@@ -271,7 +274,23 @@ function TemplatesTab({ show }: { show: (m: string) => void }) {
       {editing && (
         <RecipeForm recipe={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); show('Saved') }} />
       )}
+      {detail && <RecipeDetailModal recipe={detail} onClose={() => setDetail(null)} onEdit={() => { setEditing(detail); setDetail(null) }} />}
     </div>
+  )
+}
+
+function RecipeDetailModal({ recipe, onClose, onEdit }: { recipe: MealRecipe; onClose: () => void; onEdit: () => void }) {
+  return (
+    <Modal title={recipe.name} onClose={onClose}>
+      <div className="grid grid-stats">
+        <Stat label="Calories" value={recipe.calories ?? null} unit="kcal" />
+        <Stat label="Protein" value={recipe.protein_g ?? null} unit="g" />
+        <Stat label="Carbs" value={recipe.carbs_g ?? null} unit="g" />
+        <Stat label="Fat" value={recipe.fat_g ?? null} unit="g" />
+      </div>
+      {recipe.notes && <div className="caption" style={{ marginTop: 16 }}>{recipe.notes}</div>}
+      <div style={{ marginTop: 16 }}><Button variant="secondary" onClick={onEdit}>Edit</Button></div>
+    </Modal>
   )
 }
 
