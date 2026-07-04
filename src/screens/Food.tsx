@@ -52,6 +52,7 @@ function LogTab({ show }: { show: (m: string) => void }) {
   const [items, setItems] = useState<Meal[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Meal | 'new' | null>(null)
+  const [detail, setDetail] = useState<Meal | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = () => {
@@ -119,7 +120,9 @@ function LogTab({ show }: { show: (m: string) => void }) {
           {items.map((m) => (
             <Card key={m.id} className="card-tight">
               <div className="row between">
-                <div>
+                <div role="button" tabIndex={0} onClick={() => setDetail(m)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(m) } }}
+                  style={{ cursor: 'pointer', minWidth: 0, flex: 1 }} aria-label={`${m.name} nutrition details`}>
                   <strong style={{ textTransform: 'capitalize' }}>{m.name}</strong>
                   <div className="caption">{[m.meal_type ?? 'meal', `${m.calories ?? 0} kcal`, macroLine(m.protein_g, m.carbs_g, m.fat_g)].filter(Boolean).join(' · ')}</div>
                 </div>
@@ -141,7 +144,27 @@ function LogTab({ show }: { show: (m: string) => void }) {
           onDone={() => { setEditing(null); load(); show('Saved') }}
         />
       )}
+      {detail && <MealDetailModal meal={detail} onClose={() => setDetail(null)} onEdit={() => { setEditing(detail); setDetail(null) }} />}
     </div>
+  )
+}
+
+function MealDetailModal({ meal, onClose, onEdit }: { meal: Meal; onClose: () => void; onEdit: () => void }) {
+  return (
+    <Modal title={meal.name} onClose={onClose}>
+      <div className="row-wrap" style={{ marginBottom: 16 }}>
+        {meal.meal_type && <span className="tag">{meal.meal_type}</span>}
+        <span className="tag">{new Date(meal.eaten_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+      </div>
+      <div className="grid grid-stats">
+        <Stat label="Calories" value={meal.calories ?? null} unit="kcal" />
+        <Stat label="Protein" value={meal.protein_g ?? null} unit="g" />
+        <Stat label="Carbs" value={meal.carbs_g ?? null} unit="g" />
+        <Stat label="Fat" value={meal.fat_g ?? null} unit="g" />
+      </div>
+      {meal.notes && <div className="caption" style={{ marginTop: 16 }}>{meal.notes}</div>}
+      <div style={{ marginTop: 16 }}><Button variant="secondary" onClick={onEdit}>Edit</Button></div>
+    </Modal>
   )
 }
 
@@ -467,37 +490,42 @@ function LookupTab({ show }: { show: (m: string) => void }) {
       {results.length > 0 && (
         <div className="stack" style={{ marginTop: 16 }}>
           {results.map((r, i) => (
-            <Card key={`${r.barcode ?? r.name}-${i}`} className="card-tight">
-              <div className="row between">
-                <div>
-                  <strong>{r.name ?? 'Unknown food'}</strong>
-                  <div className="caption">{[r.brand ?? 'Food', `${r.per100g.calories ?? '—'} kcal/100g`, macroLine(r.per100g.protein_g, r.per100g.carbs_g, r.per100g.fat_g)].filter(Boolean).join(' · ')}</div>
-                </div>
-                <Button variant="secondary" size="sm" onClick={() => { setProduct(r); setResults([]); setNotFound(false) }}>Use</Button>
-              </div>
-            </Card>
+            <div key={`${r.barcode ?? r.name}-${i}`} className="card card-tight" role="button" tabIndex={0}
+              onClick={() => setProduct(r)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setProduct(r) } }}
+              style={{ cursor: 'pointer' }} aria-label={`${r.name ?? 'food'} nutrition details`}>
+              <strong>{r.name ?? 'Unknown food'}</strong>
+              <div className="caption">{[r.brand ?? 'Food', `${r.per100g.calories ?? '—'} kcal/100g`, macroLine(r.per100g.protein_g, r.per100g.carbs_g, r.per100g.fat_g)].filter(Boolean).join(' · ')}</div>
+            </div>
           ))}
         </div>
       )}
 
       {product && macros && (
-        <div style={{ marginTop: 16 }}>
-          <Card soft>
-            <strong>{product.name ?? 'Unknown product'}</strong>
-            {product.brand && <div className="caption">{product.brand}</div>}
-            {product.servingSize && <div className="caption">Serving: {product.servingSize}</div>}
-            <div className="row" style={{ marginTop: 12 }}>
-              <Field label="Grams"><Input type="number" value={grams} onChange={(e) => setGrams(e.target.value)} /></Field>
-              <Field label="Meal"><Select value={mealType} onChange={(e) => setMealType(e.target.value)}>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
-            </div>
-            <div className="caption" style={{ marginTop: 12 }}>
-              {[`${macros.calories ?? '—'} kcal`, macroLine(macros.protein_g, macros.carbs_g, macros.fat_g)].filter(Boolean).join(' · ')}
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <Button variant="primary" onClick={addToLog} loading={logging}>Add to log</Button>
-            </div>
-          </Card>
-        </div>
+        <Modal title={product.name ?? 'Nutrition'} onClose={() => setProduct(null)}>
+          <div className="row-wrap" style={{ marginBottom: 16 }}>
+            {product.brand && <span className="tag">{product.brand}</span>}
+            {product.servingSize && <span className="tag">Serving: {product.servingSize}</span>}
+            {product.barcode && <span className="tag">#{product.barcode}</span>}
+          </div>
+          <div className="stat-label">Per 100 g</div>
+          <div className="grid grid-stats" style={{ marginTop: 8 }}>
+            <Stat label="Calories" value={product.per100g.calories ?? null} unit="kcal" />
+            <Stat label="Protein" value={product.per100g.protein_g ?? null} unit="g" />
+            <Stat label="Carbs" value={product.per100g.carbs_g ?? null} unit="g" />
+            <Stat label="Fat" value={product.per100g.fat_g ?? null} unit="g" />
+          </div>
+          <div className="row-wrap" style={{ marginTop: 16 }}>
+            <Field label="Grams"><Input type="number" value={grams} onChange={(e) => setGrams(e.target.value)} /></Field>
+            <Field label="Meal"><Select value={mealType} onChange={(e) => setMealType(e.target.value)}>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+          </div>
+          <div className="caption" style={{ marginTop: 12 }}>
+            For {Number(grams) || 0} g: {[`${macros.calories ?? '—'} kcal`, macroLine(macros.protein_g, macros.carbs_g, macros.fat_g)].filter(Boolean).join(' · ')}
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <Button variant="primary" onClick={addToLog} loading={logging}>Add to log</Button>
+          </div>
+        </Modal>
       )}
     </div>
   )
