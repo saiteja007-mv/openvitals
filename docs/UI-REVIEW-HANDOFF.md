@@ -3,7 +3,7 @@
 > Resume point for the 68-finding UI enhancement pass. Full interactive triage doc (artifact):
 > https://claude.ai/code/artifact/53d663cf-0b0d-4b91-a28b-f5d1dafd59d9
 
-**Progress: Batches A–F on `ui-review-batches` — ~37 findings addressed / 68 total** (A–E committed; F in working tree pending commit. Checklist checkboxes below.)
+**Progress: Batches A–I committed on `ui-review-batches` — 55 addressed / 68 (13 pending)** (all committed; tsc + build + 66 tests green. Checklist checkboxes below.)
 
 ## How to resume
 1. `cd ~/consied` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
@@ -11,7 +11,7 @@
 3. Run locally: `npm run server` (backend :PORT) + `npm run dev` (Vite). DB at `.data/consied.sqlite`.
 4. Pick the next unchecked `[ ]` item below (they are ordered High→Low within each screen). Work screen-by-screen; keep diffs small; re-run tsc+tests after each screen; update this file's checkboxes + progress count.
 
-## Already shipped this session (A–E committed on `ui-review-batches`; F in working tree)
+## Already shipped this session (Batches A–I committed on `ui-review-batches`)
 - **Streak = log-to-count**: `server/db.cjs` habitStreak drops the auto-grace; `src/screens/Today.tsx` optimistic update; `test/db.test.cjs` updated. (66 tests pass.)
 - **Log button**: habit checkbox → `Log` / `✓ Logged` pill in `src/screens/Today.tsx`.
 - **Batch A — design system** (below, marked ✅): `src/theme.css` (stat-unit contrast, .stat-delta, .empty-action, @media(pointer:coarse) 44px targets), `src/components/UI.tsx` (Button spinner variant-aware, Empty `action` slot, Stat `delta` slot), `src/screens/Today.tsx` (monochrome calorie balance + no-meals guard).
@@ -20,7 +20,8 @@
 - **Batch C — destructive-action guards** (`Food.tsx`, `Workouts.tsx`, `Settings.tsx`): `confirm()` root-caused in each shared `del`/`restore` — meal, template, workout, plan, reminder deletes + the **Restore-backup wipe** (the data-loss trap) now all require confirmation.
 - **Batch D — Today polish** (`src/screens/Today.tsx`): empty Workouts/Meals slabs now carry a "Log a workout/meal" CTA via the new `Empty action` slot (routes to /workouts, /food); raw ISO dates → friendly `fmtDay()` ("Jul 4").
 - **Batch E — Exercises** (`src/screens/Exercises.tsx`, `src/theme.css`): skeleton cards on first load + grid dims on re-filter (no more full-grid spinner flash); cards keyboard-accessible (`role/tabIndex/onKeyDown`); honest "Load more · showing N of total"; quiet monochrome dumbbell placeholder (no "no preview" text); modal "No instructions available." fallback; inline search-clear ✕.
-- **Batch F — Trends + Body charts** (`src/components/chart.tsx` NEW, `Trends.tsx`, `Body.tsx`): shared monochrome `CHART`/`AXIS`/`TOOLTIP` (styled Recharts tooltip, one palette source); Trends page-level no-sync Empty guard, `latest · avg` summary per card, dashed "In" line. Body first-run onboarding, `Stat delta` ▲/▼ vs-last, notes shown, `.row-wrap`, save-guard, delete-with-confirm. Deferred: Trends prev-window Δ + per-metric never-logged copy; Body inline edit; file-input styling (Body+Settings).
+- **Batch F — Trends + Body charts** (`src/components/chart.tsx` NEW, `Trends.tsx`, `Body.tsx`): shared monochrome `CHART`/`AXIS`/`TOOLTIP` (styled Recharts tooltip, one palette source); Trends page-level no-sync Empty guard, `latest · avg` summary per card, dashed "In" line. Body first-run onboarding, `Stat delta` ▲/▼ vs-last, notes shown, `.row-wrap`, save-guard, delete-with-confirm. Deferred: Trends prev-window Δ + per-metric never-logged copy; Body inline edit.
+- **Batches G/H/I — Settings / Food / Workouts** (parallel workflow, 3 disjoint files): **G Settings** — reminder On/Off active pill, styled "Choose backup file…" button, reminders empty state, mobile field-wrap, friendlier microcopy, net-neg token for flags. **H Food** — legible "30g P · 40g C · 12g F" macros everywhere, trash/pencil emoji → monochrome SVG, single primary in Lookup, isolated "Log as" chip, Total-intake kcal hero + macro Stat tiles. **I Workouts** — Progress as Stat tiles (Max weight ▲/▼ vs last month + Last volume), ✓ on logged plan items, Plans empty state, ▸/▾ disclosure chevron, Kind → Select, log table scrolls in-card.
 
 > NOTE: `Empty` now takes an `action?` prop and `Stat` takes a `delta?` prop — the primitives are ready; wiring CTAs / deltas into each screen is part of the pending per-screen items. The `.excard:focus-visible` ring is in place but Exercises cards still need `role="button" tabIndex={0}` + keydown to actually receive focus (see Exercises pending).
 
@@ -50,22 +51,12 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 
 ### Meals (Food)
 - [x] `H/M` `interaction` **Delete is instant, unconfirmed, and one mis-tap away from Edit** — ✅ Batch C (confirm() on meal + template del; 44px targets from Batch A)
-- [ ] `H/S` `information-design` **Cryptic 'P30 C40 F12' macro shorthand, inconsistent with the summary card**
-  - fix: Standardize on one legible pattern reusing the summary card's middot style: '30g P · 40g C · 12g F' (or 'P 30 · C 40 · F 12'). Apply at Food.tsx:117/223/467/487 so list rows match the summary. Pure text change, no new tokens.
-  - loc: `Food.tsx:117`
+- [x] `H/S` `information-design` **Cryptic 'P30 C40 F12' macro shorthand, inconsistent with the summary card** — ✅ Batch H
 - [x] `M/S` `accessibility` **The 'kcal' unit on the hero number is near-invisible** — ✅ Batch A
-- [ ] `M/S` `consistency` **Lookup tab fires three competing black primary pills**
-  - fix: Keep one primary per section: make 'Search foods' variant="secondary" (it pairs with its input just like the barcode 'Look up' does) or make barcode 'Look up' secondary, so barcode-lookup and name-search read as two peer secondary tools and
-  - loc: `Food.tsx:449`
-- [ ] `M/M` `visual` **Emoji icons break the strict-monochrome rule**
-  - fix: Swap the emoji for inline monochrome SVG glyphs filled with currentColor (pencil/trash/×), so they inherit --ink and stay on-system. Keeps the good existing aria-labels; only the glyph source changes. Do it once in the iconbtn call sites.
-  - loc: `Food.tsx:121`
-- [ ] `M/M` `interaction` **Template 'Log as' row is verbose and ambiguous while logging**
-  - fix: Track the in-flight type (e.g. logging = {id, type}) so only the tapped chip shows '…' and the rest merely disable. Better, collapse the four chips into one primary 'Log now' defaulting to guessMealType() plus a compact type Select — mirror
-  - loc: `Food.tsx:231`
-- [ ] `M/M` `information-design` **Total-intake macros are a cramped, non-comparable caption**
-  - fix: Reuse the existing Stat component and .grid-stats (already 4-up at ≥720px, theme.css:57-58) to show Cals / P / C / F as four labeled, comparable stats, keeping kcal visually dominant. Or add a thin grayscale stacked proportion bar (canvas-s
-  - loc: `Food.tsx:101`
+- [x] `M/S` `consistency` **Lookup tab fires three competing black primary pills** — ✅ Batch H
+- [x] `M/M` `visual` **Emoji icons break the strict-monochrome rule** — ✅ Batch H
+- [x] `M/M` `interaction` **Template 'Log as' row is verbose and ambiguous while logging** — ✅ Batch H
+- [x] `M/M` `information-design` **Total-intake macros are a cramped, non-comparable caption** — ✅ Batch H
 
 ### Trends
 - [x] `H/S` `empty-state` **No-data state is a wall of 8 identical empties behind a dead pager** — ✅ Batch F (page-level Empty guard when `!maxDate`)
@@ -78,48 +69,24 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [x] `L/S` `consistency` **Chart colors hardcoded instead of theme tokens** — ✅ Batch F (`CHART`/`AXIS` in `components/chart.tsx`)
 
 ### Workouts
-- [ ] `H/M` `information-design` **Progress tab dumps the app's most important numbers into a run-on caption**
-  - fix: Restructure each ProgressEntry card into scannable figures using tokens that already exist: promote Max weight and Last-session volume to `.stat-value` / `.stat-label` pairs (or two `Stat` components) laid out in a `.row`, instead of one ca
-  - loc: `Workouts.tsx:295-309`
-- [ ] `H/M` `information-design` **Plan logging shows target vs actual but no hit/miss signal**
-  - fix: Give the row a done-state that reuses existing chrome: when `logged.length > 0`, add a monochrome check glyph (✓) next to the item name and/or bold the name (`fontWeight:600`), matching how the PR `.tag` at Workouts.tsx:299 signals status. 
-  - loc: `Workouts.tsx:217-234`
-- [ ] `M/S` `empty-state` **Plans tab has no empty state (blank area for first-time users)**
-  - fix: Mirror the sibling tabs: `plans.length === 0 ? <div style={{marginTop:16}}><Empty>No plans yet. Create a Push / Pull / Legs routine or your own with New plan.</Empty></div>` inside the non-loading branch. Reuses the existing `Empty` compone
-  - loc: `Workouts.tsx:146-156`
-- [ ] `M/S` `interaction` **Plan cards are expandable but give no affordance that they open**
-  - fix: Add a monochrome chevron on the right of the header (▸ collapsed, ▾ open) before the edit/delete buttons, using the same `.caption`/ink color. This is the standard Base Web disclosure cue and matches the FAQ-row accordion pattern in DESIGN.
-  - loc: `Workouts.tsx:174-184`
-- [ ] `M/S` `responsive` **Log table can overflow horizontally on narrow phones**
-  - fix: Wrap the `<table>` in a `<div style={{overflowX:'auto'}}>` so overflow scrolls inside the card instead of the page, or on mobile drop Detail onto a second line beneath the Exercise name. The same pattern is reused in Food.tsx, so fixing it 
-  - loc: `Workouts.tsx:49-68`
+- [x] `H/M` `information-design` **Progress tab dumps the app's most important numbers into a run-on caption** — ✅ Batch I
+- [x] `H/M` `information-design` **Plan logging shows target vs actual but no hit/miss signal** — ✅ Batch I
+- [x] `M/S` `empty-state` **Plans tab has no empty state (blank area for first-time users)** — ✅ Batch I
+- [x] `M/S` `interaction` **Plan cards are expandable but give no affordance that they open** — ✅ Batch I
+- [x] `M/S` `responsive` **Log table can overflow horizontally on narrow phones** — ✅ Batch I
 - [x] `M/M` `interaction` **Destructive delete fires instantly with no confirm or undo** — ✅ Batch C (confirm() on workout + plan del)
-- [ ] `L/S` `consistency` **Plan "Kind" is a free-text input, producing inconsistent tags**
-  - fix: Swap the Kind `Input` for the existing `<Select>` with fixed options (push / pull / legs / custom). Native constraint, no new dependency, guarantees clean `.tag` values, and matches the app's own component kit.
-  - loc: `Workouts.tsx:265`
+- [x] `L/S` `consistency` **Plan "Kind" is a free-text input, producing inconsistent tags** — ✅ Batch I
 
 ### Settings
-- [ ] `H/S` `interaction` **Reminder On/Off toggle has no visible active state**
-  - fix: Set `className={`chip ${r.enabled ? 'active' : ''}`}` so the on-state flips to the black pill per the brand's active-chip pattern, and add `aria-pressed={!!r.enabled}` to expose the toggle state. Zero new CSS — it reuses the existing token.
-  - loc: `src/screens/Settings.tsx:140`
-- [ ] `H/M` `consistency` **Raw native file input breaks the monochrome pill language**
-  - fix: Hide the input (`display:none`) and trigger it from a styled control that matches the sibling export buttons — e.g. a `<label>` wrapping a `Button variant="secondary"` ("Choose backup file…"), or style `::file-selector-button` to the `.btn-
-  - loc: `src/screens/Settings.tsx:209`
+- [x] `H/S` `interaction` **Reminder On/Off toggle has no visible active state** — ✅ Batch G
+- [x] `H/M` `consistency` **Raw native file input breaks the monochrome pill language** — ✅ Batch G
 - [x] `H/M` `interaction` **Destructive Restore and Delete fire instantly with no confirmation** — ✅ Batch C (confirm() on restore-wipe + reminder del)
   - superseded fix (done):
   - loc: `src/screens/Settings.tsx:211`
-- [ ] `M/S` `empty-state` **No empty state when there are zero reminders**
-  - fix: When `reminders.length === 0`, render `<Empty>No reminders yet — add one below to get a nudge on Slack or Telegram.</Empty>` above the add card. Reuses the existing Empty component and canvas-soft empty-state token; one conditional line.
-  - loc: `src/screens/Settings.tsx:130`
-- [ ] `M/S` `responsive` **Two-up form fields never stack on narrow phones**
-  - fix: Swap the field-pair `.row` wrappers to `.row-wrap` so the two fields drop to a single column below the flex min-width. It's a class rename that reuses an existing token; the desktop two-up layout is unchanged.
-  - loc: `src/screens/Settings.tsx:81`
-- [ ] `M/S` `microcopy` **Developer jargon leaks into user-facing microcopy**
-  - fix: Relabel the Telegram field 'Bot token & chat ID' with the `botToken:chatId` format demoted to the input placeholder, and change the row hint to a plain 'Local only — no delivery channel set.' Text-only change.
-  - loc: `src/screens/Settings.tsx:137`
-- [ ] `L/S` `information-design` **Recommendation flags use hardcoded red with no hierarchy**
-  - fix: Replace the inline hex with the existing class: `className="caption net-neg"`, and give flags a leading marker or a hairline-separated block so they visually outrank the disclaimer. Reuses the `.net-neg` token; removes a hardcoded color.
-  - loc: `src/screens/Settings.tsx:34`
+- [x] `M/S` `empty-state` **No empty state when there are zero reminders** — ✅ Batch G
+- [x] `M/S` `responsive` **Two-up form fields never stack on narrow phones** — ✅ Batch G
+- [x] `M/S` `microcopy` **Developer jargon leaks into user-facing microcopy** — ✅ Batch G
+- [x] `L/S` `information-design` **Recommendation flags use hardcoded red with no hierarchy** — ✅ Batch G
 
 ### Login
 - [ ] `H/S` `microcopy` **"Incorrect password" is shown for every failure, including server/network errors**
