@@ -4,11 +4,20 @@ import type { IScannerControls } from '@zxing/browser'
 import { BarcodeFormat, DecodeHintType } from '@zxing/library'
 import { api, todayISO } from '../api'
 import type { Meal, MealRecipe, FoodProduct } from '../types'
-import { Button, Card, Field, Input, Select, Loading, Empty, Modal, useToast } from '../components/UI'
+import { Button, Card, Field, Input, Select, Loading, Empty, Modal, Stat, useToast } from '../components/UI'
 
 const num = (v: string) => (v === '' ? undefined : Number(v))
 const nextDay = (d: string) => new Date(new Date(d + 'T00:00:00Z').getTime() + 86400000).toISOString().slice(0, 10)
 const TYPES = ['breakfast', 'lunch', 'dinner', 'snack']
+// Legible macro line, e.g. "30g P · 40g C · 12g F"; null parts are skipped.
+const macroLine = (p?: number | null, c?: number | null, f?: number | null) =>
+  [p != null ? `${p}g P` : null, c != null ? `${c}g C` : null, f != null ? `${f}g F` : null].filter(Boolean).join(' · ')
+const IconEdit = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+)
+const IconTrash = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14" /></svg>
+)
 type BarcodeDetectorShape = { detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string }>> }
 declare global { interface Window { BarcodeDetector?: new (opts?: { formats?: string[] }) => BarcodeDetectorShape } }
 const guessMealType = () => {
@@ -93,14 +102,12 @@ function LogTab({ show }: { show: (m: string) => void }) {
 
       <div style={{ marginTop: 16 }}>
         <Card soft>
-          <div className="row between">
-            <div>
-              <div className="stat-label">Total intake</div>
-              <div className="stat-value">{Math.round(totals.cal).toLocaleString()}<span className="stat-unit">kcal</span></div>
-            </div>
-            <div className="caption" style={{ textAlign: 'right' }}>
-              Protein {Math.round(totals.p)}g · Carbs {Math.round(totals.c)}g · Fat {Math.round(totals.f)}g
-            </div>
+          <div className="stat-label">Total intake</div>
+          <div className="stat-value" style={{ fontSize: 40, lineHeight: '46px' }}>{Math.round(totals.cal).toLocaleString()}<span className="stat-unit">kcal</span></div>
+          <div className="grid grid-stats" style={{ marginTop: 16 }}>
+            <Stat label="Protein" value={Math.round(totals.p)} unit="g" />
+            <Stat label="Carbs" value={Math.round(totals.c)} unit="g" />
+            <Stat label="Fat" value={Math.round(totals.f)} unit="g" />
           </div>
         </Card>
       </div>
@@ -114,11 +121,11 @@ function LogTab({ show }: { show: (m: string) => void }) {
               <div className="row between">
                 <div>
                   <strong style={{ textTransform: 'capitalize' }}>{m.name}</strong>
-                  <div className="caption">{m.meal_type ?? 'meal'} · {m.calories ?? 0} kcal · P{m.protein_g ?? 0} C{m.carbs_g ?? 0} F{m.fat_g ?? 0}</div>
+                  <div className="caption">{[m.meal_type ?? 'meal', `${m.calories ?? 0} kcal`, macroLine(m.protein_g, m.carbs_g, m.fat_g)].filter(Boolean).join(' · ')}</div>
                 </div>
                 <div className="row" style={{ gap: 6 }}>
-                  <button className="iconbtn" onClick={() => setEditing(m)} aria-label="Edit">✎</button>
-                  <button className="iconbtn" onClick={() => del(m.id)} aria-label="Delete">🗑</button>
+                  <button className="iconbtn" onClick={() => setEditing(m)} aria-label="Edit"><IconEdit /></button>
+                  <button className="iconbtn" onClick={() => del(m.id)} aria-label="Delete"><IconTrash /></button>
                 </div>
               </div>
             </Card>
@@ -187,13 +194,13 @@ function TemplatesTab({ show }: { show: (m: string) => void }) {
   const [recipes, setRecipes] = useState<MealRecipe[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<MealRecipe | 'new' | null>(null)
-  const [logging, setLogging] = useState<number | null>(null)
+  const [logging, setLogging] = useState<{ id: number; type: string } | null>(null)
 
   const load = () => { setLoading(true); api.listMealRecipes().then(setRecipes).finally(() => setLoading(false)) }
   useEffect(load, [])
 
   const logNow = async (r: MealRecipe, mealType: string) => {
-    setLogging(r.id)
+    setLogging({ id: r.id, type: mealType })
     try {
       await api.createMeal({
         name: r.name, meal_type: mealType, eaten_at: new Date().toISOString(),
@@ -220,17 +227,17 @@ function TemplatesTab({ show }: { show: (m: string) => void }) {
               <div className="row between">
                 <div>
                   <strong>{r.name}</strong>
-                  <div className="caption">{r.calories ?? 0} kcal · P{r.protein_g ?? 0} C{r.carbs_g ?? 0} F{r.fat_g ?? 0}</div>
+                  <div className="caption">{[`${r.calories ?? 0} kcal`, macroLine(r.protein_g, r.carbs_g, r.fat_g)].filter(Boolean).join(' · ')}</div>
                 </div>
                 <div className="row" style={{ gap: 6 }}>
-                  <button className="iconbtn" onClick={() => setEditing(r)} aria-label="Edit">✎</button>
-                  <button className="iconbtn" onClick={() => del(r.id)} aria-label="Delete">🗑</button>
+                  <button className="iconbtn" onClick={() => setEditing(r)} aria-label="Edit"><IconEdit /></button>
+                  <button className="iconbtn" onClick={() => del(r.id)} aria-label="Delete"><IconTrash /></button>
                 </div>
               </div>
               <div className="row-wrap" style={{ marginTop: 10 }}>
                 {TYPES.map((t) => (
-                  <button key={t} className="chip" disabled={logging === r.id} onClick={() => logNow(r, t)}>
-                    {logging === r.id ? '…' : `Log as ${t}`}
+                  <button key={t} className="chip" disabled={logging?.id === r.id} onClick={() => logNow(r, t)}>
+                    {logging?.id === r.id && logging?.type === t ? '…' : `Log as ${t}`}
                   </button>
                 ))}
               </div>
@@ -446,14 +453,14 @@ function LookupTab({ show }: { show: (m: string) => void }) {
       <div className="row-wrap" style={{ marginTop: 12 }}>
         <Button variant="secondary" onClick={scanning ? stopScan : startScan}>{scanning ? 'Stop scan' : 'Scan barcode'}</Button>
         <Input placeholder="Barcode, e.g. 5000112637922" value={barcode} onChange={(e) => setBarcode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && lookup()} />
-        <Button variant="primary" onClick={lookup} loading={loading}>Look up</Button>
+        <Button variant="secondary" onClick={lookup} loading={loading}>Look up</Button>
       </div>
       {scanMsg && <div className="caption" style={{ marginTop: 8 }}>{scanMsg}</div>}
       {scanning && <video ref={videoRef} muted playsInline style={{ width: '100%', marginTop: 12, borderRadius: 16, background: '#111' }} />}
 
       <div className="row" style={{ marginTop: 14 }}>
         <Input placeholder="Search food, e.g. oats, milk, chicken, rice" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
-        <Button variant="primary" onClick={search} loading={loading}>Search foods</Button>
+        <Button variant="secondary" onClick={search} loading={loading}>Search foods</Button>
       </div>
 
       {notFound && <div style={{ marginTop: 16 }}><Empty>No matching food found.</Empty></div>}
@@ -464,7 +471,7 @@ function LookupTab({ show }: { show: (m: string) => void }) {
               <div className="row between">
                 <div>
                   <strong>{r.name ?? 'Unknown food'}</strong>
-                  <div className="caption">{r.brand ?? 'Food'} · {r.per100g.calories ?? '—'} kcal/100g · P{r.per100g.protein_g ?? '—'} C{r.per100g.carbs_g ?? '—'} F{r.per100g.fat_g ?? '—'}</div>
+                  <div className="caption">{[r.brand ?? 'Food', `${r.per100g.calories ?? '—'} kcal/100g`, macroLine(r.per100g.protein_g, r.per100g.carbs_g, r.per100g.fat_g)].filter(Boolean).join(' · ')}</div>
                 </div>
                 <Button variant="secondary" size="sm" onClick={() => { setProduct(r); setResults([]); setNotFound(false) }}>Use</Button>
               </div>
@@ -484,7 +491,7 @@ function LookupTab({ show }: { show: (m: string) => void }) {
               <Field label="Meal"><Select value={mealType} onChange={(e) => setMealType(e.target.value)}>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
             </div>
             <div className="caption" style={{ marginTop: 12 }}>
-              {macros.calories ?? '—'} kcal · P{macros.protein_g ?? '—'} C{macros.carbs_g ?? '—'} F{macros.fat_g ?? '—'}
+              {[`${macros.calories ?? '—'} kcal`, macroLine(macros.protein_g, macros.carbs_g, macros.fat_g)].filter(Boolean).join(' · ')}
             </div>
             <div style={{ marginTop: 12 }}>
               <Button variant="primary" onClick={addToLog} loading={logging}>Add to log</Button>
