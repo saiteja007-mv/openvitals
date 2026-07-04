@@ -4,6 +4,7 @@ import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tool
 import { api, todayISO } from '../api'
 import type { Meal, WeeklySummary } from '../types'
 import { Card, Stat, Loading, Empty } from '../components/UI'
+import { CHART, AXIS, TOOLTIP } from '../components/chart'
 
 const RANGES = [7, 30, 90]
 const shortDate = (d: string) => { const x = new Date(d + 'T00:00:00Z'); return `${x.getUTCMonth() + 1}/${x.getUTCDate()}` }
@@ -115,7 +116,9 @@ export default function Trends() {
         <button className={'chip' + (tab === 'weekly' ? ' active' : '')} onClick={() => setTab('weekly')}>Weekly</button>
       </div>
 
-      {tab === 'weekly' ? <WeeklyTab /> : (
+      {tab === 'weekly' ? <WeeklyTab /> : !maxDate ? (
+        <div style={{ marginTop: 16 }}><Empty>No health data synced yet. Open <strong>Today</strong> and tap <strong>Sync</strong>, or connect Google Health in Settings — trends appear once there's history.</Empty></div>
+      ) : (
         <>
           <div className="row" style={{ marginTop: 16, gap: 10 }}>
             <button className="iconbtn" onClick={() => setPage((p) => p + 1)} disabled={!canOlder} style={{ opacity: canOlder ? 1 : 0.4 }} aria-label="Older">‹</button>
@@ -124,18 +127,18 @@ export default function Trends() {
             {page !== 0 && <button className="chip" onClick={() => setPage(0)}>Latest</button>}
           </div>
 
-          <ChartCard title="Steps">{bar(win(stepsAll), 'steps')}</ChartCard>
+          <ChartCard title="Steps" summary={summarize(win(stepsAll), '')}>{bar(win(stepsAll), 'steps')}</ChartCard>
           <ChartCard title="Calories — in vs out">
             {(() => { const d = calAll.filter((c) => inWin(c.date)); return d.some((x) => x.In || x.Out)
-              ? <ResponsiveContainer width="100%" height={220}><LineChart data={d}><CartesianGrid vertical={false} stroke="#efefef" /><XAxis dataKey="label" tick={AX} interval="preserveStartEnd" /><YAxis tick={AX} width={44} /><Tooltip /><Legend /><Line type="monotone" dataKey="Out" stroke="#000000" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="In" stroke="#afafaf" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer>
+              ? <ResponsiveContainer width="100%" height={220}><LineChart data={d}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={44} /><Tooltip {...TOOLTIP} /><Legend /><Line type="monotone" dataKey="Out" stroke={CHART.ink} strokeWidth={2} dot={false} /><Line type="monotone" dataKey="In" stroke={CHART.mid} strokeWidth={2} strokeDasharray="5 3" dot={false} /></LineChart></ResponsiveContainer>
               : <NoData /> })()}
           </ChartCard>
-          <ChartCard title="Resting heart rate">{line(win(restHrAll), 'bpm', true)}</ChartCard>
-          <ChartCard title="Heart-rate variability (ms)">{line(win(hrvAll), 'ms')}</ChartCard>
-          <ChartCard title="Blood oxygen (SpO₂ %)">{line(win(spo2All), '%', true)}</ChartCard>
-          <ChartCard title="Sleep (hours)">{bar(win(sleepAll), 'hours')}</ChartCard>
-          <ChartCard title="Distance (km)">{line(win(distAll), 'km')}</ChartCard>
-          <ChartCard title="Weight (kg)">{line(win(weightAll), 'kg', true)}</ChartCard>
+          <ChartCard title="Resting heart rate" summary={summarize(win(restHrAll), 'bpm')}>{line(win(restHrAll), 'bpm', true)}</ChartCard>
+          <ChartCard title="Heart-rate variability (ms)" summary={summarize(win(hrvAll), 'ms')}>{line(win(hrvAll), 'ms')}</ChartCard>
+          <ChartCard title="Blood oxygen (SpO₂ %)" summary={summarize(win(spo2All), '%')}>{line(win(spo2All), '%', true)}</ChartCard>
+          <ChartCard title="Sleep (hours)" summary={summarize(win(sleepAll), 'h')}>{bar(win(sleepAll), 'hours')}</ChartCard>
+          <ChartCard title="Distance (km)" summary={summarize(win(distAll), 'km')}>{line(win(distAll), 'km')}</ChartCard>
+          <ChartCard title="Weight (kg)" summary={summarize(win(weightAll), 'kg')}>{line(win(weightAll), 'kg', true)}</ChartCard>
         </>
       )}
     </div>
@@ -200,16 +203,27 @@ function WeeklyTab() {
   )
 }
 
-const AX = { fontSize: 11, fill: '#afafaf' }
 function bar(data: Pt[], name: string) {
   if (!data.length) return <NoData />
-  return <ResponsiveContainer width="100%" height={200}><BarChart data={data}><CartesianGrid vertical={false} stroke="#efefef" /><XAxis dataKey="label" tick={AX} interval="preserveStartEnd" /><YAxis tick={AX} width={40} /><Tooltip /><Bar dataKey="value" name={name} fill="#000000" radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer>
+  return <ResponsiveContainer width="100%" height={200}><BarChart data={data}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={40} /><Tooltip {...TOOLTIP} /><Bar dataKey="value" name={name} fill={CHART.ink} radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer>
 }
 function line(data: Pt[], name: string, tight = false) {
   if (!data.length) return <NoData />
-  return <ResponsiveContainer width="100%" height={200}><LineChart data={data}><CartesianGrid vertical={false} stroke="#efefef" /><XAxis dataKey="label" tick={AX} interval="preserveStartEnd" /><YAxis tick={AX} width={42} domain={tight ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} /><Tooltip /><Line type="monotone" dataKey="value" name={name} stroke="#000000" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer>
+  return <ResponsiveContainer width="100%" height={200}><LineChart data={data}><CartesianGrid vertical={false} stroke={CHART.grid} /><XAxis dataKey="label" tick={AXIS} interval="preserveStartEnd" /><YAxis tick={AXIS} width={42} domain={tight ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} /><Tooltip {...TOOLTIP} /><Line type="monotone" dataKey="value" name={name} stroke={CHART.ink} strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer>
 }
-function ChartCard({ title, children }: { title: string; children: ReactNode }) {
-  return <div style={{ marginTop: 16 }}><Card><h3 style={{ marginBottom: 12 }}>{title}</h3>{children}</Card></div>
+// Latest reading + window average, so each card carries a comparable number, not just a shape.
+function summarize(pts: Pt[], unit: string): string | null {
+  if (!pts.length) return null
+  const vals = pts.map((p) => p.value)
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length
+  const fmt = (n: number) => (Math.abs(n) >= 100 ? Math.round(n).toLocaleString() : String(Math.round(n * 10) / 10))
+  const u = unit ? ` ${unit}` : ''
+  return `${fmt(vals[vals.length - 1])}${u} · avg ${fmt(avg)}`
+}
+function ChartCard({ title, summary, children }: { title: string; summary?: string | null; children: ReactNode }) {
+  return <div style={{ marginTop: 16 }}><Card>
+    <div className="row between" style={{ marginBottom: 12 }}><h3>{title}</h3>{summary && <span className="caption">{summary}</span>}</div>
+    {children}
+  </Card></div>
 }
 function NoData() { return <Empty>No data for this range.</Empty> }

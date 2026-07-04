@@ -3,11 +3,20 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api, todayISO, fileToDataUrl } from '../api'
 import type { BodyMetric, Settings } from '../types'
 import { Button, Card, Field, Input, Stat, Loading, Empty, useToast } from '../components/UI'
+import { CHART, AXIS, TOOLTIP } from '../components/chart'
 
-const AX = { fontSize: 11, fill: '#afafaf' }
 const shortDate = (d: string) => { const x = new Date(d + 'T00:00:00Z'); return `${x.getUTCMonth() + 1}/${x.getUTCDate()}` }
 const num = (v: string) => (v === '' ? undefined : Number(v))
 const lastWith = (rows: BodyMetric[], key: keyof BodyMetric) => [...rows].reverse().find((m) => m[key] != null)?.[key] as number | undefined
+const prevWith = (rows: BodyMetric[], key: keyof BodyMetric) => { const v = rows.filter((m) => m[key] != null); return v.length > 1 ? (v[v.length - 2][key] as number) : undefined }
+// Signed change vs the previous logged value — monochrome ▲/▼ via the Stat delta slot (no red/green).
+function deltaOf(rows: BodyMetric[], key: keyof BodyMetric, unit: string, digits = 1): { text: string; dir?: 'up' | 'down' } | undefined {
+  const cur = lastWith(rows, key), prev = prevWith(rows, key)
+  if (cur == null || prev == null) return undefined
+  const d = Math.round((cur - prev) * 10 ** digits) / 10 ** digits
+  if (d === 0) return { text: `no change` }
+  return { text: `${d > 0 ? '+' : ''}${d}${unit} vs last`, dir: d > 0 ? 'up' : 'down' }
+}
 
 export default function Body() {
   const [metrics, setMetrics] = useState<BodyMetric[]>([])
@@ -22,6 +31,7 @@ export default function Body() {
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
+  const del = async (id: number) => { if (!confirm('Delete this entry?')) return; await api.deleteBodyMetric(id); load(); show('Deleted') }
 
   const sorted = useMemo(() => [...metrics].sort((a, b) => a.date.localeCompare(b.date)), [metrics])
   const weightSeries = useMemo(() => sorted.filter((m) => m.weight_kg != null).map((m) => ({ label: shortDate(m.date), value: m.weight_kg as number })), [sorted])
@@ -34,29 +44,35 @@ export default function Body() {
     <div>
       <h1>Body</h1>
 
-      <div className="grid grid-stats" style={{ marginTop: 16 }}>
-        <Stat label="Weight" value={latestWeight ?? null} unit="kg" />
-        <Stat label="BMI" value={bmi != null ? bmi.toFixed(1) : null} />
-        <Stat label="Body fat" value={lastWith(sorted, 'body_fat_pct') ?? null} unit="%" />
-        <Stat label="Waist" value={lastWith(sorted, 'waist_cm') ?? null} unit="cm" />
-      </div>
-      {!settings?.height_cm && <div className="caption" style={{ marginTop: 8 }}>Set your height in Settings to compute BMI.</div>}
+      {sorted.length === 0 ? (
+        <div style={{ marginTop: 16 }}><Empty>Log your first entry below to start tracking weight, BMI, body fat and measurements over time.</Empty></div>
+      ) : (
+        <>
+          <div className="grid grid-stats" style={{ marginTop: 16 }}>
+            <Stat label="Weight" value={latestWeight ?? null} unit="kg" delta={deltaOf(sorted, 'weight_kg', 'kg')} />
+            <Stat label="BMI" value={bmi != null ? bmi.toFixed(1) : null} />
+            <Stat label="Body fat" value={lastWith(sorted, 'body_fat_pct') ?? null} unit="%" delta={deltaOf(sorted, 'body_fat_pct', '%')} />
+            <Stat label="Waist" value={lastWith(sorted, 'waist_cm') ?? null} unit="cm" delta={deltaOf(sorted, 'waist_cm', 'cm')} />
+          </div>
+          {!settings?.height_cm && <div className="caption" style={{ marginTop: 8 }}>Set your height in Settings to compute BMI.</div>}
 
-      {weightSeries.length > 1 && (
-        <div style={{ marginTop: 16 }}>
-          <Card>
-            <h3 style={{ marginBottom: 12 }}>Weight trend</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={weightSeries}>
-                <CartesianGrid vertical={false} stroke="#efefef" />
-                <XAxis dataKey="label" tick={AX} />
-                <YAxis tick={AX} width={40} domain={['auto', 'auto']} />
-                <Tooltip />
-                <Line type="monotone" dataKey="value" stroke="#000000" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </Card>
-        </div>
+          {weightSeries.length > 1 && (
+            <div style={{ marginTop: 16 }}>
+              <Card>
+                <h3 style={{ marginBottom: 12 }}>Weight trend</h3>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={weightSeries}>
+                    <CartesianGrid vertical={false} stroke={CHART.grid} />
+                    <XAxis dataKey="label" tick={AXIS} />
+                    <YAxis tick={AXIS} width={40} domain={['auto', 'auto']} />
+                    <Tooltip {...TOOLTIP} formatter={(v) => [`${v} kg`, 'Weight']} />
+                    <Line type="monotone" dataKey="value" stroke={CHART.ink} strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </Card>
+            </div>
+          )}
+        </>
       )}
 
       <h3 className="section-title">Log an entry</h3>
@@ -68,7 +84,7 @@ export default function Body() {
           {[...sorted].reverse().map((m) => (
             <Card key={m.id} className="card-tight">
               <div className="row between">
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <strong>{m.date}</strong>
                   <div className="caption">
                     {[
@@ -79,8 +95,12 @@ export default function Body() {
                       m.arm_cm != null && `Arm ${m.arm_cm}cm`,
                     ].filter(Boolean).join(' · ') || '—'}
                   </div>
+                  {m.notes && <div className="caption mute-soft" style={{ marginTop: 2 }}>{m.notes}</div>}
                 </div>
-                {m.photo_ref && <img src={api.bodyPhotoUrl(m.photo_ref)} alt="progress" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8 }} />}
+                <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+                  {m.photo_ref && <img src={api.bodyPhotoUrl(m.photo_ref)} alt="progress" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8 }} />}
+                  <button className="iconbtn" onClick={() => del(m.id)} aria-label="Delete entry">🗑</button>
+                </div>
               </div>
             </Card>
           ))}
@@ -118,18 +138,18 @@ function EntryForm({ onSaved }: { onSaved: () => void }) {
     <Card soft>
       <div className="stack">
         <Field label="Date"><Input type="date" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} /></Field>
-        <div className="row">
+        <div className="row-wrap">
           <Field label="Weight (kg)"><Input type="number" value={weight} onChange={(e) => setWeight(e.target.value)} /></Field>
           <Field label="Body fat (%)"><Input type="number" value={bodyFat} onChange={(e) => setBodyFat(e.target.value)} /></Field>
         </div>
-        <div className="row">
+        <div className="row-wrap">
           <Field label="Waist (cm)"><Input type="number" value={waist} onChange={(e) => setWaist(e.target.value)} /></Field>
           <Field label="Chest (cm)"><Input type="number" value={chest} onChange={(e) => setChest(e.target.value)} /></Field>
           <Field label="Arm (cm)"><Input type="number" value={arm} onChange={(e) => setArm(e.target.value)} /></Field>
         </div>
         <Field label="Notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
         <Field label="Progress photo (private, optional)"><input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} /></Field>
-        <Button variant="primary" onClick={save} loading={saving}>Save entry</Button>
+        <Button variant="primary" onClick={save} loading={saving} disabled={!weight && !bodyFat && !waist && !chest && !arm && !photo}>Save entry</Button>
       </div>
     </Card>
   )

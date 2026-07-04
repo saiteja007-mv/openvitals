@@ -3,7 +3,7 @@
 > Resume point for the 68-finding UI enhancement pass. Full interactive triage doc (artifact):
 > https://claude.ai/code/artifact/53d663cf-0b0d-4b91-a28b-f5d1dafd59d9
 
-**Progress: Batches A–E committed on `ui-review-batches` — ~26 findings addressed / 68 total** (checklist checkboxes below; token-level fixes also silently close the touch-target + contrast items across every screen)
+**Progress: Batches A–F on `ui-review-batches` — ~37 findings addressed / 68 total** (A–E committed; F in working tree pending commit. Checklist checkboxes below.)
 
 ## How to resume
 1. `cd ~/consied` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
@@ -11,7 +11,7 @@
 3. Run locally: `npm run server` (backend :PORT) + `npm run dev` (Vite). DB at `.data/consied.sqlite`.
 4. Pick the next unchecked `[ ]` item below (they are ordered High→Low within each screen). Work screen-by-screen; keep diffs small; re-run tsc+tests after each screen; update this file's checkboxes + progress count.
 
-## Already shipped this session (uncommitted, not yet in git)
+## Already shipped this session (A–E committed on `ui-review-batches`; F in working tree)
 - **Streak = log-to-count**: `server/db.cjs` habitStreak drops the auto-grace; `src/screens/Today.tsx` optimistic update; `test/db.test.cjs` updated. (66 tests pass.)
 - **Log button**: habit checkbox → `Log` / `✓ Logged` pill in `src/screens/Today.tsx`.
 - **Batch A — design system** (below, marked ✅): `src/theme.css` (stat-unit contrast, .stat-delta, .empty-action, @media(pointer:coarse) 44px targets), `src/components/UI.tsx` (Button spinner variant-aware, Empty `action` slot, Stat `delta` slot), `src/screens/Today.tsx` (monochrome calorie balance + no-meals guard).
@@ -20,6 +20,7 @@
 - **Batch C — destructive-action guards** (`Food.tsx`, `Workouts.tsx`, `Settings.tsx`): `confirm()` root-caused in each shared `del`/`restore` — meal, template, workout, plan, reminder deletes + the **Restore-backup wipe** (the data-loss trap) now all require confirmation.
 - **Batch D — Today polish** (`src/screens/Today.tsx`): empty Workouts/Meals slabs now carry a "Log a workout/meal" CTA via the new `Empty action` slot (routes to /workouts, /food); raw ISO dates → friendly `fmtDay()` ("Jul 4").
 - **Batch E — Exercises** (`src/screens/Exercises.tsx`, `src/theme.css`): skeleton cards on first load + grid dims on re-filter (no more full-grid spinner flash); cards keyboard-accessible (`role/tabIndex/onKeyDown`); honest "Load more · showing N of total"; quiet monochrome dumbbell placeholder (no "no preview" text); modal "No instructions available." fallback; inline search-clear ✕.
+- **Batch F — Trends + Body charts** (`src/components/chart.tsx` NEW, `Trends.tsx`, `Body.tsx`): shared monochrome `CHART`/`AXIS`/`TOOLTIP` (styled Recharts tooltip, one palette source); Trends page-level no-sync Empty guard, `latest · avg` summary per card, dashed "In" line. Body first-run onboarding, `Stat delta` ▲/▼ vs-last, notes shown, `.row-wrap`, save-guard, delete-with-confirm. Deferred: Trends prev-window Δ + per-metric never-logged copy; Body inline edit; file-input styling (Body+Settings).
 
 > NOTE: `Empty` now takes an `action?` prop and `Stat` takes a `delta?` prop — the primitives are ready; wiring CTAs / deltas into each screen is part of the pending per-screen items. The `.excard:focus-visible` ring is in place but Exercises cards still need `role="button" tabIndex={0}` + keydown to actually receive focus (see Exercises pending).
 
@@ -67,25 +68,14 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
   - loc: `Food.tsx:101`
 
 ### Trends
-- [ ] `H/S` `empty-state` **No-data state is a wall of 8 identical empties behind a dead pager**
-  - fix: Guard the Charts tab: if maxDate is falsy (no series and no calAll rows), skip both the pager (lines 120-125) and the 8 ChartCards and render ONE page-level <Empty> with actionable copy, e.g. 'No health data synced yet. Connect Google Healt
-  - loc: `src/screens/Trends.tsx:118-138`
-- [ ] `H/M` `information-design` **Charts show shapes but zero comparable numbers**
-  - fix: In the ChartCard header row, add a right-aligned .caption computed from the windowed series: latest value + unit and delta vs the previous equal window (compare win() at current page vs page+1), e.g. '72 bpm · ▲2 vs prev 30d'. Color the del
-  - loc: `src/screens/Trends.tsx:212-214`
-- [ ] `M/S` `visual` **Default Recharts Tooltip breaks the monochrome Base-Web language**
-  - fix: Define one shared tooltip config and pass it to all three: contentStyle={{ fontFamily: var(--font), fontSize:12, border:'1px solid var(--hairline)', borderRadius:8 }}, itemStyle color var(--ink), a formatter that appends the metric unit ('7
-  - loc: `src/screens/Trends.tsx:130`
-- [ ] `M/S` `accessibility` **Calories in-vs-out relies on faint grey-vs-black color alone**
-  - fix: Keep both lines dark and distinguish by pattern instead of lightness: give 'In' strokeDasharray="4 3" (and/or use --hairline-mid #4b4b4b rather than #afafaf). Pattern + weight reads clearly in strict monochrome without introducing color.
-  - loc: `src/screens/Trends.tsx:130`
-- [ ] `M/S` `microcopy` **Per-metric 'No data for this range' misleads for never-logged metrics**
-  - fix: Pass the full (unwindowed) series into NoData. If the metric has zero points overall, render a metric-level 'No {metric} logged yet' (or drop the card entirely); only when points exist outside the current window show 'No data in this range.
-  - loc: `src/screens/Trends.tsx:215`
+- [x] `H/S` `empty-state` **No-data state is a wall of 8 identical empties behind a dead pager** — ✅ Batch F (page-level Empty guard when `!maxDate`)
+- [x] `H/M` `information-design` **Charts show shapes but zero comparable numbers** — ✅ Batch F (ChartCard header shows `latest · avg`; prev-window Δ still TODO)
+- [x] `M/S` `visual` **Default Recharts Tooltip breaks the monochrome Base-Web language** — ✅ Batch F (shared `TOOLTIP` in `components/chart.tsx`)
+- [x] `M/S` `accessibility` **Calories in-vs-out relies on faint grey-vs-black color alone** — ✅ Batch F ("In" line dashed + `CHART.mid`)
+- [ ] `M/S` `microcopy` **Per-metric 'No data for this range' misleads for never-logged metrics** — DEFERRED (page-level guard covers all-empty; per-metric "never logged" nuance not done)
+  - loc: `src/screens/Trends.tsx` NoData
 - [x] `M/S` `accessibility` **Range chips and pager arrows are sub-44px touch targets** — ✅ Batch A
-- [ ] `L/S` `consistency` **Chart colors hardcoded instead of theme tokens**
-  - fix: Hoist a single CHART palette constant at the top of the file mapping to the token values (or read them once via getComputedStyle(document.documentElement)) and reference it in bar/line/calories/AX. One source of truth, consistent with the t
-  - loc: `src/screens/Trends.tsx:203-210`
+- [x] `L/S` `consistency` **Chart colors hardcoded instead of theme tokens** — ✅ Batch F (`CHART`/`AXIS` in `components/chart.tsx`)
 
 ### Workouts
 - [ ] `H/M` `information-design` **Progress tab dumps the app's most important numbers into a run-on caption**
@@ -163,3 +153,23 @@ Grouped by screen, High→Low. `Impact/Effort` `category`.
 - [ ] `L/S` `empty-state` **Whole-app boot state is a tiny top-anchored spinner**
   - fix: Give the boot state real vertical presence: add min-height:100vh and align-items:center to .center-load (or a boot-specific variant). Optionally show the 'Consied.' wordmark above the spinner so the first paint is branded rather than empty.
   - loc: `src/App.tsx:32`
+
+### Body metrics
+- [x] `H/M` `consistency` **History entries are read-only — no edit or delete** — ✅ Batch F (delete w/ confirm; inline edit still TODO)
+- [x] `H/M` `empty-state` **First-run screen is a wall of em-dashes** — ✅ Batch F (onboarding Empty when no entries)
+- [x] `H/M` `information-design` **Stats show only the latest value with no change/delta** — ✅ Batch F (`deltaOf` → Stat `delta` ▲/▼ "vs last")
+- [x] `M/S` `information-design` **Chart tooltip is unstyled default recharts** — ✅ Batch F (shared `TOOLTIP` + `formatter` → "72.4 kg")
+- [x] `M/S` `information-design` **Notes are captured and saved but never shown** — ✅ Batch F (rendered under history summary)
+- [x] `M/S` `responsive` **Three number inputs in a non-wrapping row cram on mobile** — ✅ Batch F (`.row` → `.row-wrap`)
+- [x] `M/S` `interaction` **Save is enabled on an empty form** — ✅ Batch F (disabled until a value/photo present)
+- [ ] `M/S` `visual` **Raw browser file input breaks the monochrome look** — DEFERRED (file-input styling; also affects Settings restore — do as one mini-batch)
+  - fix: Hide the native `<input type="file">`, trigger from a `<label>`+`Button variant="subtle"` ("Add photo"), show chosen filename/thumbnail. loc: `Body.tsx` EntryForm photo field + `Settings.tsx:209`.
+
+### Design system (tokens + UI kit)
+- [x] `H/S` `empty-state` **Empty state has no action slot** — ✅ Batch A (`Empty action` prop; wired on Today in D)
+- [x] `M/S` `consistency` **Button loading spinner white-on-light — invisible on non-primary** — ✅ Batch A (variant-aware `spin-dark`)
+- [x] `M/S` `accessibility` **Stat unit rendered in --mute (low contrast)** — ✅ Batch A (`--mute` → `--body`)
+- [x] `H/M` `information-design` **Stat can't show a delta/trend** — ✅ Batch A (`Stat delta` slot; used in Today/Body/Trends)
+- [x] `M/S` `accessibility` **Icon buttons and small pills are 36px (sub-44px)** — ✅ Batch A (`@media(pointer:coarse)` 44px)
+- [ ] `H/M` `accessibility` **Modal and Toast lack dialog/live-region semantics** — TODO
+  - fix: Modal → `role="dialog" aria-modal="true"`, `aria-labelledby` the title, Escape-to-close, focus on mount + restore on close. Toast → `role="status" aria-live="polite"`. loc: `src/components/UI.tsx` Modal/Toast.
