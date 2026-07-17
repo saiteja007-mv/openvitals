@@ -93,7 +93,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       if (p === '/mcp' || p.startsWith('/mcp/')) {
         if (!mcpHandler) {
           const { createMcpHandler } = await import('./mcp.mjs')
-          mcpHandler = createMcpHandler({ db, openfit, summary, weekly, progress, token: mcpToken })
+          mcpHandler = createMcpHandler({ db, openfit, summary, weekly, progress, recommend, exercises, food, reminders: reminderEngine, token: mcpToken })
         }
         let raw = ''
         if (m === 'POST') { for await (const chunk of req) raw += chunk }

@@ -85,7 +85,13 @@ function initDb(file) {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(reminder_id, date)
     );
+    CREATE TABLE IF NOT EXISTS hydration (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL, ml REAL NOT NULL, notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE INDEX IF NOT EXISTS idx_workouts_performed ON workouts(performed_at);
+    CREATE INDEX IF NOT EXISTS idx_hydration_at ON hydration(at);
     CREATE INDEX IF NOT EXISTS idx_meals_eaten ON meals(eaten_at);
     CREATE INDEX IF NOT EXISTS idx_habits_date ON habits(date);
     CREATE INDEX IF NOT EXISTS idx_body_metrics_date ON body_metrics(date);
@@ -114,6 +120,7 @@ const COLS = {
   meals: ['name', 'meal_type', 'eaten_at', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes'],
   meal_recipes: ['name', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes'],
   reminders: ['kind', 'channel', 'enabled', 'time_of_day', 'target'],
+  hydration: ['at', 'ml', 'notes'],
 }
 const BUMP_UPDATED_AT = new Set(['meal_recipes', 'reminders'])
 
@@ -364,7 +371,7 @@ function logReminderAttempt(reminderId, date, status, detail) {
 function reminderLogFor(date) { return db.prepare('SELECT * FROM reminder_log WHERE date = ?').all(date) }
 
 // --- export / backup (health data only — never reminders' webhook/token targets) ---
-const EXPORT_TABLES = ['workouts', 'meals', 'meal_recipes', 'body_metrics', 'habits', 'habit_defs', 'settings', 'workout_plans']
+const EXPORT_TABLES = ['workouts', 'meals', 'meal_recipes', 'body_metrics', 'habits', 'habit_defs', 'settings', 'workout_plans', 'hydration']
 function exportAll() {
   const out = {}
   for (const t of EXPORT_TABLES) out[t] = db.prepare(`SELECT * FROM ${t}`).all()
@@ -437,6 +444,10 @@ module.exports = {
   deleteReminder: (id) => remove('reminders', id),
   logReminderAttempt,
   reminderLogFor,
+
+  createHydration: (h) => insert('hydration', h),
+  listHydration: (f) => list('hydration', 'at', f),
+  deleteHydration: (id) => remove('hydration', id),
 
   exportAll,
   exportTable,
