@@ -14,7 +14,9 @@ const CRED_FILE = process.env.CONSIED_GH_CREDENTIALS || path.join(__dirname, '..
 
 let lastGood = null
 
-const localIsoDate = () => new Date().toISOString().slice(0, 10)
+// LOCAL date (America/Chicago), not UTC — else in the evening we'd query tomorrow's
+// (empty) day and today's health data wouldn't reflect. Matches openfit's original impl.
+const localIsoDate = (now = new Date()) => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return fallback } }
 
 function loadConfig() {
