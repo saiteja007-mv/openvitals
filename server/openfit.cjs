@@ -38,7 +38,11 @@ async function validToken(creds, config) {
   return updated
 }
 
-async function pull(date) {
+const TTL_MS = Number(process.env.CONSIED_HEALTH_TTL_MS ?? 60_000) // reuse a fresh pull for TTL ms so rapid tool calls don't hammer the Google API (rate limits); 0 disables
+let cache = null // { at, date, payload }
+
+async function pull(date, { force = false } = {}) {
+  if (!force && cache && cache.date === date && Date.now() - cache.at < TTL_MS) return cache.payload
   const config = loadConfig()
   const creds = await validToken(getCreds(), config)
   const payload = await googleHealth.syncData(creds.token.access_token, date)
@@ -48,6 +52,7 @@ async function pull(date) {
   creds.lastSyncAt = payload.generatedAt
   saveCreds(creds)
   lastGood = payload
+  cache = { at: Date.now(), date, payload }
   return payload
 }
 
@@ -56,7 +61,7 @@ async function getHealth() {
   try { return { stale: false, data: await pull(localIsoDate()) } }
   catch { return { stale: true, data: lastGood } }
 }
-async function sync() { return pull(localIsoDate()) }
+async function sync() { return pull(localIsoDate(), { force: true }) }
 async function getStatus() {
   const creds = getCreds()
   let configured = false

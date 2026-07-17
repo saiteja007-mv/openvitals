@@ -14,6 +14,7 @@ test('getHealth pulls Google Health, caches last good, degrades to stale', async
   fs.writeFileSync(creds, JSON.stringify({ token: { access_token: 'a', refresh_token: 'r', expiresAt: Date.now() + 3_600_000 } }))
   process.env.GOOGLE_HEALTH_SECRETS = secrets
   process.env.CONSIED_GH_CREDENTIALS = creds
+  process.env.CONSIED_HEALTH_TTL_MS = '0' // disable the pull cache so the stale-degrade path is exercised
   delete require.cache[require.resolve('../server/openfit.cjs')]
   const of = require('../server/openfit.cjs')
 

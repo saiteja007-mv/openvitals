@@ -8,7 +8,11 @@ import { z } from 'zod'
 
 const isoDay = (d) => d.toISOString().slice(0, 10)
 // LOCAL "today" (not UTC) so evening calls don't roll to tomorrow's empty day.
-const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}` }
+const p2 = (x) => String(x).padStart(2, '0')
+const today = () => { const n = new Date(); return `${n.getFullYear()}-${p2(n.getMonth() + 1)}-${p2(n.getDate())}` }
+// LOCAL now as an ISO-ish datetime (no Z) so a logged item's date part = local today,
+// otherwise an evening log gets a UTC-tomorrow stamp and won't show under today.
+const localNow = () => { const n = new Date(); return `${today()}T${p2(n.getHours())}:${p2(n.getMinutes())}:${p2(n.getSeconds())}` }
 const shift = (dateStr, n) => { const d = new Date(dateStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return isoDay(d) }
 const nextDay = (dateStr) => shift(dateStr, 1)
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj ?? null, null, 2) }] })
@@ -16,7 +20,7 @@ const fail = (e) => ({ content: [{ type: 'text', text: 'Error: ' + (e?.message |
 const wrap = (fn) => async (args) => { try { return ok(await fn(args || {})) } catch (e) { return fail(e) } }
 
 // Google Health endpoint keys present in the cached sync payload.
-const HEALTH_METRICS = ['profile', 'devices', 'activity', 'activityGoals', 'stepsIntraday', 'caloriesIntraday', 'heartIntraday', 'sleep', 'sleepTrend', 'sleepGoal', 'stepsTrend', 'caloriesTrend', 'heartTrend', 'metricTrends', 'bodyWeight', 'bodyFat', 'weightGoal', 'water', 'waterGoal', 'food', 'breathing', 'hrv', 'spo2', 'skinTemperature', 'coreTemperature', 'cardio', 'ecg', 'activities', 'bloodGlucose']
+const HEALTH_METRICS = ['profile', 'devices', 'activity', 'activityGoals', 'stepsIntraday', 'caloriesIntraday', 'heartIntraday', 'sleep', 'sleepTrend', 'sleepGoal', 'stepsTrend', 'caloriesTrend', 'heartTrend', 'metricTrends', 'bodyWeight', 'bodyFat', 'weightGoal', 'water', 'waterGoal', 'food', 'breathing', 'hrv', 'spo2', 'skinTemperature', 'coreTemperature', 'cardio', 'ecg', 'activities', 'identity', 'bloodGlucose']
 
 function buildServer(d) {
   const { db, openfit, summary, weekly, progress, recommend, exercises, food, reminders } = d
@@ -73,7 +77,7 @@ function buildServer(d) {
   T('list_workouts', 'Logged workouts in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listWorkouts({ from, to }))
   T('log_workout', 'Log a completed exercise set.',
     { name: z.string(), sets: z.number().optional(), reps: z.number().optional(), weight_kg: z.number().optional(), duration_min: z.number().optional(), exercise_id: z.string().optional(), plan_id: z.number().optional(), notes: z.string().optional(), performed_at: z.string().optional() },
-    (a) => db.createWorkout({ ...a, performed_at: a.performed_at || new Date().toISOString() }))
+    (a) => db.createWorkout({ ...a, performed_at: a.performed_at || localNow() }))
   T('update_workout', 'Update fields of a logged workout by id.',
     { id: z.number(), name: z.string().optional(), sets: z.number().optional(), reps: z.number().optional(), weight_kg: z.number().optional(), duration_min: z.number().optional(), notes: z.string().optional() },
     ({ id, ...p }) => db.updateWorkout(id, p))
@@ -97,7 +101,7 @@ function buildServer(d) {
   T('list_meals', 'Logged meals in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listMeals({ from, to }))
   T('log_meal', 'Log a meal with nutrition macros.',
     { name: z.string(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(), eaten_at: z.string().optional() },
-    (a) => db.createMeal({ ...a, eaten_at: a.eaten_at || new Date().toISOString() }))
+    (a) => db.createMeal({ ...a, eaten_at: a.eaten_at || localNow() }))
   T('update_meal', 'Update a logged meal by id.',
     { id: z.number(), name: z.string().optional(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional() },
     ({ id, ...p }) => db.updateMeal(id, p))
@@ -119,7 +123,7 @@ function buildServer(d) {
   // ===== Hydration (consied-local log; Google Health water is read-only) =====
   T('log_hydration', 'Log water intake in milliliters.',
     { ml: z.number(), at: z.string().describe('ISO datetime; default now').optional(), notes: z.string().optional() },
-    (a) => db.createHydration({ ...a, at: a.at || new Date().toISOString() }))
+    (a) => db.createHydration({ ...a, at: a.at || localNow() }))
   T('list_hydration', 'Your logged water intake in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listHydration({ from, to }))
   T('delete_hydration', 'Delete a hydration log entry by id.', { id: z.number() }, ({ id }) => db.deleteHydration(id))
 
