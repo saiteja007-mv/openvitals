@@ -1,23 +1,37 @@
 const { test } = require('node:test')
 const assert = require('node:assert')
-const http = require('node:http')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 
-test('getHealth caches last good and degrades to stale', async () => {
-  const srv = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ source: 'google-health', date: '2026-07-01' }))
-  })
-  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
-  process.env.OPENFIT_URL = 'http://127.0.0.1:' + srv.address().port
+// openfit.cjs now calls the Google Health API directly (no :42813 backend). We mock the
+// google-health-service via the test hook so this stays offline.
+test('getHealth pulls Google Health, caches last good, degrades to stale', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consied-gh-'))
+  const secrets = path.join(dir, 'secrets.json')
+  const creds = path.join(dir, 'creds.json')
+  fs.writeFileSync(secrets, JSON.stringify({ installed: { client_id: 'x', client_secret: 'y' } }))
+  fs.writeFileSync(creds, JSON.stringify({ token: { access_token: 'a', refresh_token: 'r', expiresAt: Date.now() + 3_600_000 } }))
+  process.env.GOOGLE_HEALTH_SECRETS = secrets
+  process.env.CONSIED_GH_CREDENTIALS = creds
   delete require.cache[require.resolve('../server/openfit.cjs')]
   const of = require('../server/openfit.cjs')
+
+  let good = true
+  of.__setGoogleHealthForTest({
+    refreshAccessToken: async () => ({ access_token: 'a', expiresAt: Date.now() + 3_600_000 }),
+    syncData: async () => { if (!good) throw new Error('boom'); return { source: 'google-health', date: '2026-07-01', requestStats: { total: 10, succeeded: 10 } } },
+  })
 
   let h = await of.getHealth()
   assert.equal(h.stale, false)
   assert.equal(h.data.source, 'google-health')
 
-  await new Promise((r) => srv.close(r))
+  good = false
   h = await of.getHealth()
   assert.equal(h.stale, true)
-  assert.equal(h.data.date, '2026-07-01')
+  assert.equal(h.data.date, '2026-07-01') // last good preserved
+
+  const st = await of.getStatus()
+  assert.equal(st.connected, true)
 })

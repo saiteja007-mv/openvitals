@@ -1,35 +1,65 @@
-const BASE = () => process.env.OPENFIT_URL || 'http://127.0.0.1:42813'
+// Google Health — DIRECT API access. Replaces the old openfit :42813 backend bridge:
+// consied now refreshes the OAuth token and calls the Google Health API itself, so the
+// data is live/original from the health endpoints (no cached app layer in between).
+// Reuses the shared OAuth client secret + a local copy of the refresh token → no re-login.
+// (Filename kept as openfit.cjs to avoid churn; it no longer talks to any openfit backend.)
+const fs = require('node:fs')
+const path = require('node:path')
+const os = require('node:os')
+
+let googleHealth = require('./google-health-service.cjs')
+
+const SECRETS_FILE = process.env.GOOGLE_HEALTH_SECRETS || path.join(os.homedir(), '.hermes', 'secrets', 'google-health-client.json')
+const CRED_FILE = process.env.CONSIED_GH_CREDENTIALS || path.join(__dirname, '..', '.data', 'google-health-credentials.json')
 
 let lastGood = null
 
-async function j(url, opts) {
-  const r = await fetch(url, opts)
-  if (!r.ok) throw new Error('openfit ' + r.status)
-  return r.json()
+const localIsoDate = () => new Date().toISOString().slice(0, 10)
+const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return fallback } }
+
+function loadConfig() {
+  const raw = JSON.parse(fs.readFileSync(SECRETS_FILE, 'utf8'))
+  const creds = raw.installed || raw.web
+  if (!creds?.client_id || !creds?.client_secret) throw new Error('Missing client_id/client_secret in ' + SECRETS_FILE)
+  return { provider: 'google-health', clientId: creds.client_id, clientSecret: creds.client_secret, redirectUri: 'http://127.0.0.1:42813/oauth/callback' }
+}
+const getCreds = () => readJson(CRED_FILE, { token: null, lastSyncAt: null })
+const saveCreds = (v) => fs.writeFileSync(CRED_FILE, JSON.stringify(v), { mode: 0o600 })
+
+// Return credentials with a non-expired access token, refreshing (and persisting) if needed.
+async function validToken(creds, config) {
+  if (!creds.token) throw new Error('Google Health not connected (no token). Re-run the login with NordVPN off.')
+  if (Number(creds.token.expiresAt || 0) > Date.now() + 90_000 && creds.token.access_token) return creds
+  const token = await googleHealth.refreshAccessToken(config, creds.token)
+  const updated = { ...creds, token }
+  saveCreds(updated)
+  return updated
 }
 
+async function pull(date) {
+  const config = loadConfig()
+  const creds = await validToken(getCreds(), config)
+  const payload = await googleHealth.syncData(creds.token.access_token, date)
+  const total = Number(payload.requestStats?.total || 0)
+  const succeeded = Number(payload.requestStats?.succeeded || 0)
+  if (!total || succeeded < Math.max(3, Math.ceil(total * 0.2))) throw new Error('Sync returned too few valid sources; kept previous data.')
+  creds.lastSyncAt = payload.generatedAt
+  saveCreds(creds)
+  lastGood = payload
+  return payload
+}
+
+// Same interface the rest of consied expects (getHealth / sync / getStatus).
 async function getHealth() {
-  try {
-    const data = await j(BASE() + '/api/cached')
-    lastGood = data
-    return { stale: false, data }
-  } catch {
-    return { stale: true, data: lastGood }
-  }
+  try { return { stale: false, data: await pull(localIsoDate()) } }
+  catch { return { stale: true, data: lastGood } }
 }
-
-async function sync() {
-  const data = await j(BASE() + '/api/sync', { method: 'POST' })
-  lastGood = data
-  return data
-}
-
+async function sync() { return pull(localIsoDate()) }
 async function getStatus() {
-  try {
-    return await j(BASE() + '/api/status')
-  } catch {
-    return { connected: false, reachable: false }
-  }
+  const creds = getCreds()
+  let configured = false
+  try { loadConfig(); configured = true } catch { /* secrets missing */ }
+  return { source: 'google-health-direct', configured, connected: Boolean(creds.token?.access_token || creds.token?.refresh_token), lastSyncAt: creds.lastSyncAt || null }
 }
 
-module.exports = { getHealth, sync, getStatus }
+module.exports = { getHealth, sync, getStatus, __setGoogleHealthForTest: (m) => { googleHealth = m } }

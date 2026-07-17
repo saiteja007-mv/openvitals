@@ -12,6 +12,18 @@ test('server smoke: exercises, workout, meal, summary', async () => {
   process.env.OPENFIT_URL = 'http://127.0.0.1:' + stub.address().port
   process.env.CONSIED_NO_AUTH = '1' // this file exercises feature endpoints, not the auth gate (see auth.test.cjs / smoke auth test below)
 
+  // openfit.cjs now calls Google Health directly; inject a mock so the smoke stays offline.
+  const fs = require('node:fs'), os = require('node:os')
+  const gdir = fs.mkdtempSync(path.join(os.tmpdir(), 'consied-gh-'))
+  fs.writeFileSync(path.join(gdir, 's.json'), JSON.stringify({ installed: { client_id: 'x', client_secret: 'y' } }))
+  fs.writeFileSync(path.join(gdir, 'c.json'), JSON.stringify({ token: { access_token: 'a', refresh_token: 'r', expiresAt: Date.now() + 3_600_000 } }))
+  process.env.GOOGLE_HEALTH_SECRETS = path.join(gdir, 's.json')
+  process.env.CONSIED_GH_CREDENTIALS = path.join(gdir, 'c.json')
+  require('../server/openfit.cjs').__setGoogleHealthForTest({
+    refreshAccessToken: async () => ({ access_token: 'a', expiresAt: Date.now() + 3_600_000 }),
+    syncData: async () => ({ date: '2026-07-01', endpoints: { activity: { summary: { steps: 8000, caloriesOut: 2400 } } }, requestStats: { total: 10, succeeded: 10 } }),
+  })
+
   const { createServer } = require('../server/index.cjs')
   const srv = createServer({
     dbFile: ':memory:',
