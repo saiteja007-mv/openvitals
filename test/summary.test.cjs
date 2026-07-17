@@ -40,16 +40,17 @@ test('extractHealthMetrics uses latest non-null across trends + metricTrends', (
   assert.equal(h.asOf, '2026-06-30')
 
   const today = s.extractHealthMetrics(cached, '2026-07-01')
-  assert.equal(today.steps, 7873)       // requested current day still falls back while mid-sync
-  assert.equal(today.restingHr, 60)
-  assert.equal(today.hrv, 73.3)
-  assert.equal(today.spo2, 96.8)
+  assert.equal(today.steps, null)       // requested day has no exact-date row -> null, never another day's value
+  assert.equal(today.restingHr, null)
+  assert.equal(today.hrv, null)
+  assert.equal(today.spo2, null)
+  assert.equal(today.asOf, '2026-06-30') // but asOf still surfaces the real latest health date
 
-  const calFallback = s.extractHealthMetrics({
+  const calNoFallback = s.extractHealthMetrics({
     date: '2026-07-01',
     endpoints: { caloriesTrend: { 'activities-calories': [{ dateTime: '2026-06-30', value: 2222 }] } },
   }, '2026-07-01')
-  assert.equal(calFallback.caloriesOut, 2222)
+  assert.equal(calNoFallback.caloriesOut, null) // no live activity.summary and no exact-date trend row
 
   const liveCalories = s.extractHealthMetrics({
     date: '2026-07-01',
@@ -64,5 +65,30 @@ test('extractHealthMetrics uses latest non-null across trends + metricTrends', (
   const noCachedDate = s.extractHealthMetrics({
     endpoints: { stepsTrend: { 'activities-steps': [{ dateTime: '2026-06-30', value: 7873 }, { dateTime: localToday }] } },
   }, localToday)
-  assert.equal(noCachedDate.steps, 7873)
+  assert.equal(noCachedDate.steps, null) // today's row exists but has no value -> null, not yesterday's count
+})
+
+test('extractHealthMetrics never mixes in another day when the requested day (incl. today) is stale/missing', () => {
+  // OpenFit cache only synced through yesterday; UI requests "today" explicitly.
+  const cached = {
+    date: '2026-07-02',
+    endpoints: {
+      stepsTrend: { 'activities-steps': [{ dateTime: '2026-07-01', value: 6000 }, { dateTime: '2026-07-02', value: 8000 }] },
+      sleepTrend: { sleep: [{ dateTime: '2026-07-02', minutesAsleep: 400, isMainSleep: true }] },
+      heartTrend: { 'activities-heart': [{ dateTime: '2026-07-02', value: { restingHeartRate: 58 } }] },
+    },
+  }
+  const requestedToday = s.extractHealthMetrics(cached, '2026-07-03')
+  assert.equal(requestedToday.steps, null)
+  assert.equal(requestedToday.sleepMin, null)
+  assert.equal(requestedToday.restingHr, null)
+  assert.equal(requestedToday.caloriesOut, null)
+  assert.equal(requestedToday.asOf, '2026-07-02') // reports the real latest synced date, not the requested one
+
+  // A genuine past selected date with data still resolves to its own exact-day values.
+  const pastDay = s.extractHealthMetrics(cached, '2026-07-02')
+  assert.equal(pastDay.steps, 8000)
+  assert.equal(pastDay.sleepMin, 400)
+  assert.equal(pastDay.restingHr, 58)
+  assert.equal(pastDay.asOf, '2026-07-02')
 })

@@ -14,6 +14,10 @@ const SCOPES = [
   'https://www.googleapis.com/auth/googlehealth.nutrition.readonly',
   'https://www.googleapis.com/auth/googlehealth.profile.readonly',
   'https://www.googleapis.com/auth/googlehealth.sleep.readonly',
+  'https://www.googleapis.com/auth/googlehealth.ecg.readonly',
+  'https://www.googleapis.com/auth/googlehealth.irn.readonly',
+  'https://www.googleapis.com/auth/googlehealth.location.readonly',
+  'https://www.googleapis.com/auth/googlehealth.settings.readonly',
 ]
 
 let nextApiRequestAt = 0

@@ -19,7 +19,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
   fs.writeFileSync(path.join(gdir, 'c.json'), JSON.stringify({ token: { access_token: 'a', refresh_token: 'r', expiresAt: Date.now() + 3_600_000 } }))
   process.env.GOOGLE_HEALTH_SECRETS = path.join(gdir, 's.json')
   process.env.CONSIED_GH_CREDENTIALS = path.join(gdir, 'c.json')
-  require('../server/openfit.cjs').__setGoogleHealthForTest({
+  require('../server/googlehealth.cjs').__setGoogleHealthForTest({
     refreshAccessToken: async () => ({ access_token: 'a', expiresAt: Date.now() + 3_600_000 }),
     syncData: async () => ({ date: '2026-07-01', endpoints: { activity: { summary: { steps: 8000, caloriesOut: 2400 } } }, requestStats: { total: 10, succeeded: 10 } }),
   })

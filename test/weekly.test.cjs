@@ -54,3 +54,29 @@ test('weeklySummary: handles missing goals/health gracefully', () => {
   assert.equal(s.avgSteps, null)
   assert.deepEqual(s.insights, [])
 })
+
+test('weeklySummary: ranks by degree, not whole hits, when only one goal has data', () => {
+  // Real case: nothing logged by hand, so steps is the only scoreable goal and every day
+  // clears it. Hit-counting tied every day at 1 and returned the first date as BOTH
+  // best and worst. Degree of achievement must still separate them.
+  const days = [
+    day('2026-07-13', { calIn: 0, protein: 0, steps: 10610 }),
+    day('2026-07-14', { calIn: 0, protein: 0, steps: 10279 }),
+    day('2026-07-15', { calIn: 0, protein: 0, steps: 11336 }),
+    day('2026-07-16', { calIn: 0, protein: 0, steps: 18824 }),
+  ]
+  const s = weeklySummary(days, { calorie_goal: 2200, protein_goal: 120, steps_goal: 10000 })
+  assert.equal(s.bestDay, '2026-07-16')
+  assert.equal(s.worstDay, '2026-07-14')
+  assert.notEqual(s.bestDay, s.worstDay)
+})
+
+test('weeklySummary: identical days rank as neither best nor worst', () => {
+  const days = [
+    day('2026-07-13', { calIn: 2200, protein: 120, steps: 11000 }),
+    day('2026-07-14', { calIn: 2200, protein: 120, steps: 11000 }),
+  ]
+  const s = weeklySummary(days, { calorie_goal: 2200, protein_goal: 120, steps_goal: 10000 })
+  assert.equal(s.bestDay, null, 'a genuine tie must not name a best day')
+  assert.equal(s.worstDay, null, 'a genuine tie must not name a worst day')
+})

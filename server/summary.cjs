@@ -67,13 +67,14 @@ function sleepMinutes(sessions) {
 const r1 = (v) => (v == null ? null : Math.round(Number(v)))
 const r10 = (v) => (v == null ? null : Math.round(Number(v) * 10) / 10)
 
-// date optional. If omitted or >= today (OpenFit's cached.date), fall back to latest-available
-// (mirrors Google Health "today" tiles while today is mid-sync). For a past date, show that exact day.
+// date optional. Omitted -> latest-available snapshot. Given (including today) -> that exact day
+// only, never another date's values; asOf still reports the real latest health date so callers can
+// show a "still syncing" indicator instead of silently mixing in a different day's metrics.
 function extractHealthMetrics(cached, date) {
   const ep = (cached && cached.endpoints) || {}
   const mt = (ep.metricTrends && ep.metricTrends.values) || []
   const today = (cached && cached.date) || new Date().toISOString().slice(0, 10)
-  const fb = !date || date >= today
+  const fb = !date
 
   const M = (arr, pick) => {
     if (date) { const v = valueOn(arr, pick, date); if (v != null) return v }
@@ -94,7 +95,7 @@ function extractHealthMetrics(cached, date) {
 
   const stepsV = M(ep.stepsTrend && ep.stepsTrend['activities-steps'], (r) => r.value)
   const latestStepsDate = latest(ep.stepsTrend && ep.stepsTrend['activities-steps'], (r) => r.value).date
-  const asOf = fb ? (latestStepsDate || today || date) : date
+  const asOf = date && stepsV != null ? date : (latestStepsDate || today || date)
 
   return {
     steps: r1(stepsV),

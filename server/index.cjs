@@ -4,7 +4,7 @@ const path = require('node:path')
 const { sendJson, readBody } = require('./http-helpers.cjs')
 const db = require('./db.cjs')
 const exercises = require('./exercises.cjs')
-const openfit = require('./openfit.cjs')
+const googleHealth = require('./googlehealth.cjs')
 const summary = require('./summary.cjs')
 const auth = require('./auth.cjs')
 const progress = require('./progress.cjs')
@@ -93,7 +93,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       if (p === '/mcp' || p.startsWith('/mcp/')) {
         if (!mcpHandler) {
           const { createMcpHandler } = await import('./mcp.mjs')
-          mcpHandler = createMcpHandler({ db, openfit, summary, weekly, progress, recommend, exercises, food, reminders: reminderEngine, token: mcpToken })
+          mcpHandler = createMcpHandler({ db, googleHealth, summary, weekly, progress, recommend, exercises, food, reminders: reminderEngine, token: mcpToken })
         }
         let raw = ''
         if (m === 'POST') { for await (const chunk of req) raw += chunk }
@@ -114,9 +114,9 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       if (p.startsWith('/api/') && !auth.authed(req)) return sendJson(res, 401, { error: 'unauthorized' })
       if (p === '/api/me' && m === 'GET') return sendJson(res, 200, { ok: true })
 
-      if (p === '/api/status' && m === 'GET') return sendJson(res, 200, { app: 'consied', openfit: await openfit.getStatus() })
-      if (p === '/api/health' && m === 'GET') return sendJson(res, 200, await openfit.getHealth())
-      if (p === '/api/sync' && m === 'POST') return sendJson(res, 200, await openfit.sync())
+      if (p === '/api/status' && m === 'GET') return sendJson(res, 200, { app: 'consied', googleHealth: await googleHealth.getStatus() })
+      if (p === '/api/health' && m === 'GET') return sendJson(res, 200, await googleHealth.getHealth())
+      if (p === '/api/sync' && m === 'POST') return sendJson(res, 200, await googleHealth.sync())
 
       if (p === '/api/exercises/facets' && m === 'GET') return sendJson(res, 200, exercises.facets())
       if (p === '/api/exercises' && m === 'GET') return sendJson(res, 200, exercises.searchExercises(Object.fromEntries(q)))
@@ -205,7 +205,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
 
       if (p === '/api/recommendation' && m === 'GET') {
         const settings = db.getSettings()
-        const health = await openfit.getHealth()
+        const health = await googleHealth.getHealth()
         const cached = health.data
         const weightSeries = weightSeriesFrom(cached)
         const today = todayISO()
@@ -227,7 +227,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
         const to = q.get('to') || todayISO()
         const from = q.get('from') || shiftDate(to, -6)
         if ((new Date(to) - new Date(from)) / 86400000 > 92) return sendJson(res, 400, { error: 'range too large (max 93 days)' })
-        const health = await openfit.getHealth()
+        const health = await googleHealth.getHealth()
         const settings = db.getSettings()
         const days = []
         for (let d = from; d <= to; d = shiftDate(d, 1)) {
@@ -282,7 +282,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       if (p === '/api/summary' && m === 'GET') {
         const date = q.get('date') || todayISO()
         const to = nextDay(date)
-        const health = await openfit.getHealth()
+        const health = await googleHealth.getHealth()
         const workouts = db.listWorkouts({ from: date, to })
         const meals = db.listMeals({ from: date, to })
         return sendJson(res, 200, summary.daySummary(date, { cached: health.data, workouts, meals }))
@@ -291,7 +291,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       if (p.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' })
       if (p.startsWith('/media/')) return serveStatic(res, path.join(__dirname, '..', 'media'), p.slice('/media'.length))
       // Webapp removed — this service is now an MCP server; no SPA is served.
-      if (p === '/' || p === '') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('consied MCP server — POST /mcp with a bearer token to connect an AI client.') }
+      if (p === '/' || p === '') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('Health MCP server — POST /mcp with a bearer token to connect an AI client.') }
       res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'not found', hint: 'This is an MCP server; use POST /mcp with a bearer token.' }))
     } catch (e) {
       sendJson(res, 500, { error: e.message })
@@ -308,5 +308,5 @@ if (require.main === module) {
     dbFile: process.env.CONSIED_DB || path.join(root, '.data', 'consied.sqlite'),
     exercisesJson: path.join(root, 'data', 'exercises.json'),
     distDir: path.join(root, 'dist'),
-  }).listen(port, '127.0.0.1', () => console.log('consied on http://127.0.0.1:' + port))
+  }).listen(port, '127.0.0.1', () => console.log('health-mcp on http://127.0.0.1:' + port))
 }

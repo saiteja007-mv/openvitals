@@ -1,5 +1,5 @@
-// Consied MCP server — exposes the single-user health data as MCP tools over
-// Streamable HTTP at /mcp. Bearer-token gated. Deps (db, openfit, summary, weekly,
+// Health MCP server — exposes the single-user health data as MCP tools over
+// Streamable HTTP at /mcp. Bearer-token gated. Deps (db, googleHealth, summary, weekly,
 // progress, recommend, exercises, food, reminders) are injected by index.cjs so this
 // module stays SDK-only. Stateless: one server+transport per request.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -23,16 +23,16 @@ const wrap = (fn) => async (args) => { try { return ok(await fn(args || {})) } c
 const HEALTH_METRICS = ['profile', 'devices', 'activity', 'activityGoals', 'stepsIntraday', 'caloriesIntraday', 'heartIntraday', 'sleep', 'sleepTrend', 'sleepGoal', 'stepsTrend', 'caloriesTrend', 'heartTrend', 'metricTrends', 'bodyWeight', 'bodyFat', 'weightGoal', 'water', 'waterGoal', 'food', 'breathing', 'hrv', 'spo2', 'skinTemperature', 'coreTemperature', 'cardio', 'ecg', 'activities', 'identity', 'bloodGlucose']
 
 function buildServer(d) {
-  const { db, openfit, summary, weekly, progress, recommend, exercises, food, reminders } = d
-  const s = new McpServer({ name: 'consied-health', version: '2.0.0' })
-  const health = () => openfit.getHealth().then((h) => h?.data ?? null).catch(() => null)
+  const { db, googleHealth, summary, weekly, progress, recommend, exercises, food, reminders } = d
+  const s = new McpServer({ name: 'health-mcp', version: '2.0.0' })
+  const health = () => googleHealth.getHealth().then((h) => h?.data ?? null).catch(() => null)
   const ep = async (key) => { const c = await health(); return c?.endpoints?.[key] ?? null }
   const T = (name, desc, shape, fn) => s.tool(name, desc, shape, wrap(fn))
   const planItem = z.object({ name: z.string(), exercise_id: z.string().optional(), target_sets: z.number().optional(), target_reps: z.number().optional(), target_weight_kg: z.number().optional() })
 
   // ===== Google Health data points (read-only — Google Health has no write API) =====
-  T('get_status', 'App + Google-Health sync status.', {}, async () => ({ app: 'consied', openfit: await openfit.getStatus() }))
-  T('get_health', 'Full raw cached Google Health payload (all endpoints).', {}, () => openfit.getHealth())
+  T('get_status', 'App + Google-Health sync status.', {}, async () => ({ app: 'health-mcp', googleHealth: await googleHealth.getStatus() }))
+  T('get_health', 'Full raw cached Google Health payload (all endpoints).', {}, () => googleHealth.getHealth())
   T('get_health_metric', 'Read one Google Health data point by name.',
     { metric: z.enum(HEALTH_METRICS).describe('which health endpoint to read') }, ({ metric }) => ep(metric))
   T('get_activity', 'Steps, calories out, distance, floors, active/zone/sedentary minutes (+ goals + trends).', {},
@@ -51,7 +51,7 @@ function buildServer(d) {
   T('get_breathing', 'Breathing / respiratory rate.', {}, () => ep('breathing'))
   T('get_temperature', 'Skin and core body temperature.', {}, async () => ({ skin: await ep('skinTemperature'), core: await ep('coreTemperature') }))
   T('get_devices', 'Connected Google Health devices.', {}, () => ep('devices'))
-  T('sync_google_health', 'Pull the latest Google Health data into consied.', {}, () => openfit.sync())
+  T('sync_google_health', 'Pull the latest Google Health data into the health store.', {}, () => googleHealth.sync())
 
   // ===== Summaries / recommendation / export =====
   T('get_daily_summary', 'Full day summary: health, workouts, meals, nutrition, calorie balance.',
@@ -71,7 +71,7 @@ function buildServer(d) {
     const currentWeightKg = weightSeries.length ? weightSeries[weightSeries.length - 1].value : summary.extractHealthMetrics(cached, t).weightKg
     return recommend.recommend({ weightSeries, avgCaloriesIn, avgCaloriesOut: outCount ? outSum / outCount : null, currentWeightKg, goalWeightKg: settings.weight_goal_kg })
   })
-  T('export_all', 'Export the entire consied database (all tables) as JSON.', {}, () => db.exportAll())
+  T('export_all', 'Export the entire health database (all tables) as JSON.', {}, () => db.exportAll())
 
   // ===== Workouts =====
   T('list_workouts', 'Logged workouts in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listWorkouts({ from, to }))
@@ -120,7 +120,7 @@ function buildServer(d) {
     ({ id, ...p }) => db.updateMealRecipe(id, p))
   T('delete_meal_recipe', 'Delete a meal template by id.', { id: z.number() }, ({ id }) => db.deleteMealRecipe(id))
 
-  // ===== Hydration (consied-local log; Google Health water is read-only) =====
+  // ===== Hydration (local hydration log; Google Health water is read-only) =====
   T('log_hydration', 'Log water intake in milliliters.',
     { ml: z.number(), at: z.string().describe('ISO datetime; default now').optional(), notes: z.string().optional() },
     (a) => db.createHydration({ ...a, at: a.at || localNow() }))
@@ -176,7 +176,7 @@ export function createMcpHandler(deps) {
     const authz = req.headers['authorization'] || ''
     const provided = authz.startsWith('Bearer ') ? authz.slice(7) : (req.headers['x-api-key'] || '')
     if (!token || provided !== token) {
-      res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer realm="consied-mcp"' })
+      res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer realm="health-mcp"' })
       return res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized: valid bearer token required' }, id: null }))
     }
     const server = buildServer(deps)

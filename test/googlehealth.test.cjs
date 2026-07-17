@@ -15,8 +15,8 @@ test('getHealth pulls Google Health, caches last good, degrades to stale', async
   process.env.GOOGLE_HEALTH_SECRETS = secrets
   process.env.CONSIED_GH_CREDENTIALS = creds
   process.env.CONSIED_HEALTH_TTL_MS = '0' // disable the pull cache so the stale-degrade path is exercised
-  delete require.cache[require.resolve('../server/openfit.cjs')]
-  const of = require('../server/openfit.cjs')
+  delete require.cache[require.resolve('../server/googlehealth.cjs')]
+  const of = require('../server/googlehealth.cjs')
 
   let good = true
   of.__setGoogleHealthForTest({
