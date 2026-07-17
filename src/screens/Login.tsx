@@ -26,7 +26,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <form onSubmit={submit} style={{ width: '100%', maxWidth: 360 }}>
         <Card className="elevated">
-          <div className="brand" style={{ fontSize: 32, letterSpacing: '-1px' }}>Consied<span style={{ color: 'var(--mute)' }}>.</span></div>
+          <div className="brand" style={{ fontSize: 32, letterSpacing: '-1px' }}>Health MCP<span style={{ color: 'var(--mute)' }}>.</span></div>
           <div className="caption" style={{ marginBottom: 20 }}>Sign in to continue.</div>
           <div className="stack">
             <Field label="Password">

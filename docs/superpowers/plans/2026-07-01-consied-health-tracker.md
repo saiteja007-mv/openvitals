@@ -1,10 +1,10 @@
-# Consied Health Tracker — Implementation Plan
+# Health MCP Health Tracker — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a single-user health tracker on ideapad that shows Google Health stats (via OpenFit), a 1,324-exercise library, and manual workout + meal logging, in an Uber/Base-Web UI, tunneled via Cloudflare behind Access.
 
-**Architecture:** A Node backend (`better-sqlite3`) on `:42815` serves a built React/Vite SPA from one origin, proxies OpenFit (`:42813`) for read-only Google Health data, serves the in-memory exercises catalog, and does CRUD for workouts/meals in SQLite. Deployed as `consied.service`; exposed at `health.saitejamothukuri.com` behind Cloudflare Access.
+**Architecture:** A Node backend (`better-sqlite3`) on `:42815` serves a built React/Vite SPA from one origin, proxies OpenFit (`:42813`) for read-only Google Health data, serves the in-memory exercises catalog, and does CRUD for workouts/meals in SQLite. Deployed as `health-mcp.service`; exposed at `health.saitejamothukuri.com` behind Cloudflare Access.
 
 **Tech Stack:** Node (CommonJS `.cjs`) + `better-sqlite3`; React + Vite + TypeScript; charts via `recharts`; systemd; cloudflared.
 
@@ -14,8 +14,8 @@
 - Single origin: backend serves `dist/` AND `/api/*`. No CORS in prod.
 - Only new backend dependency: `better-sqlite3`. No web framework — Node stdlib `http` + helpers.
 - OpenFit base URL: `http://127.0.0.1:42813` (env `OPENFIT_URL`).
-- SQLite file: `/home/saiteja/consied/.data/consied.sqlite` (env `CONSIED_DB`).
-- Exercises JSON: `/home/saiteja/consied/data/exercises.json` (committed, 1,324 records).
+- SQLite file: `/home/saiteja/health-mcp/.data/health-mcp.sqlite` (env `HEALTH_MCP_DB`).
+- Exercises JSON: `/home/saiteja/health-mcp/data/exercises.json` (committed, 1,324 records).
 - Vite dev server port 5175; production is static `dist/`.
 - UI: Uber / Base Web via `/design-system` skill (Task 8). Mobile-first responsive.
 - Commit after every task. TDD for non-trivial logic.
@@ -24,9 +24,9 @@
 
 ## File Structure
 ```
-consied/
+health-mcp/
   data/exercises.json            # committed catalog (1,324)
-  .data/consied.sqlite           # runtime DB (gitignored)
+  .data/health-mcp.sqlite           # runtime DB (gitignored)
   server/
     index.cjs                    # http server, routing, static serving, wiring
     db.cjs                       # SQLite init + workouts/meals CRUD
@@ -42,7 +42,7 @@ consied/
     components/*                 # shared UI (from /design-system)
     screens/Today.tsx Exercises.tsx Workouts.tsx Meals.tsx Trends.tsx
   package.json tsconfig.json vite.config.ts index.html
-  deploy/consied.service
+  deploy/health-mcp.service
 ```
 
 ---
@@ -56,12 +56,12 @@ consied/
 - [ ] **Step 1: package.json**
 ```json
 {
-  "name": "consied", "version": "0.1.0", "private": true,
+  "name": "health-mcp", "version": "0.1.0", "private": true,
   "scripts": { "server": "node server/index.cjs", "test": "node --test", "dev": "vite", "build": "tsc -b && vite build" },
   "dependencies": { "better-sqlite3": "^11.8.0" }
 }
 ```
-- [ ] **Step 2: install** — Run: `cd /home/saiteja/consied && npm install better-sqlite3` — Expected: native build succeeds on Linux.
+- [ ] **Step 2: install** — Run: `cd /home/saiteja/health-mcp && npm install better-sqlite3` — Expected: native build succeeds on Linux.
 - [ ] **Step 3: write test/http-helpers.test.cjs**
 ```js
 const { test } = require('node:test'); const assert = require('node:assert')
@@ -81,7 +81,7 @@ function parseQuery(reqUrl) { return new URL(reqUrl, 'http://127.0.0.1').searchP
 module.exports = { sendJson, sendHtml, readBody, parseQuery }
 ```
 - [ ] **Step 6: run — passes** — `node --test test/http-helpers.test.cjs` — Expected PASS
-- [ ] **Step 7: commit** — `git add -A && git commit -m "feat(consied): backend scaffold + http helpers"`
+- [ ] **Step 7: commit** — `git add -A && git commit -m "feat(health-mcp): backend scaffold + http helpers"`
 
 ---
 
@@ -119,7 +119,7 @@ test('meal CRUD + date filter', () => {
 - [ ] **Step 2: run — fails** — `node --test test/db.test.cjs` — Expected FAIL
 - [ ] **Step 3: write server/db.cjs** (schema per spec §5; column-safe insert/update; date-bounded list; row-delete returns changes>0). Use `better-sqlite3`, `journal_mode=WAL`, `CREATE TABLE IF NOT EXISTS` for `workouts` and `meals` with the columns from the spec, indexes on `performed_at` and `eaten_at`. Whitelist columns per table; parameterized statements only. Export the 9 functions from Interfaces.
 - [ ] **Step 4: run — passes** — `node --test test/db.test.cjs` — Expected PASS (both)
-- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(consied): sqlite storage for workouts+meals"`
+- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(health-mcp): sqlite storage for workouts+meals"`
 
 > Reference implementation for db.cjs (use verbatim):
 ```js
@@ -173,7 +173,7 @@ function facets() { return { bodyParts: uniq('body_part'), equipment: uniq('equi
 module.exports = { loadExercises, searchExercises, getExercise, facets }
 ```
 - [ ] **Step 4: run — passes** — `node --test test/exercises.test.cjs` — Expected PASS
-- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(consied): exercises catalog search"`
+- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(health-mcp): exercises catalog search"`
 
 ---
 
@@ -209,7 +209,7 @@ async function getStatus() { try { return await j(BASE() + '/api/status') } catc
 module.exports = { getHealth, sync, getStatus }
 ```
 - [ ] **Step 4: run — passes** — `node --test test/openfit.test.cjs` — Expected PASS
-- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(consied): openfit proxy with stale fallback"`
+- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(health-mcp): openfit proxy with stale fallback"`
 
 ---
 
@@ -271,7 +271,7 @@ function daySummary(date, { cached, workouts, meals }) {
 module.exports = { extractHealthMetrics, nutritionTotals, calorieBalance, daySummary }
 ```
 - [ ] **Step 4: run — passes** — `node --test test/summary.test.cjs` — Expected PASS
-- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(consied): day summary + calorie balance"`
+- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(health-mcp): day summary + calorie balance"`
 
 ---
 
@@ -282,7 +282,7 @@ module.exports = { extractHealthMetrics, nutritionTotals, calorieBalance, daySum
 **Interfaces — Consumes:** all modules above. **Produces:** `createServer({port,dbFile,exercisesJson,distDir}) -> http.Server`.
 
 Routes (all under one origin, JSON except static):
-- `GET  /api/status` -> `{app:'consied', openfit: await getStatus()}`
+- `GET  /api/status` -> `{app:'health-mcp', openfit: await getStatus()}`
 - `GET  /api/health` -> `await getHealth()`
 - `POST /api/sync` -> `await sync()`
 - `GET  /api/exercises` -> `searchExercises(query)`  ·  `GET /api/exercises/facets` -> `facets()`  ·  `GET /api/exercises/:id` -> `getExercise` (404 if null)
@@ -311,10 +311,10 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 })
 ```
 - [ ] **Step 2: run — fails** — `node --test test/smoke.test.cjs` — Expected FAIL
-- [ ] **Step 3: write server/index.cjs** — implement `createServer` with manual routing (match method+pathname, `/api/*` first, else static from distDir with SPA fallback to index.html). Wire: `db.initDb(dbFile)`, `exercises.loadExercises(exercisesJson)`. Use http-helpers. Summary route computes `from=date`, `to=date+1day` (string compare works on ISO). At bottom: `if (require.main === module) createServer({port:42815, dbFile:process.env.CONSIED_DB||'/home/saiteja/consied/.data/consied.sqlite', exercisesJson:__dirname+'/../data/exercises.json', distDir:__dirname+'/../dist'}).listen(42815,'127.0.0.1',()=>console.log('consied on 42815'))`.
+- [ ] **Step 3: write server/index.cjs** — implement `createServer` with manual routing (match method+pathname, `/api/*` first, else static from distDir with SPA fallback to index.html). Wire: `db.initDb(dbFile)`, `exercises.loadExercises(exercisesJson)`. Use http-helpers. Summary route computes `from=date`, `to=date+1day` (string compare works on ISO). At bottom: `if (require.main === module) createServer({port:42815, dbFile:process.env.HEALTH_MCP_DB||'/home/saiteja/health-mcp/.data/health-mcp.sqlite', exercisesJson:__dirname+'/../data/exercises.json', distDir:__dirname+'/../dist'}).listen(42815,'127.0.0.1',()=>console.log('health-mcp on 42815'))`.
 - [ ] **Step 4: run — passes** — `node --test` (all tests) — Expected PASS
 - [ ] **Step 5: manual boot check** — `node server/index.cjs &` then `curl -s http://127.0.0.1:42815/api/status` returns JSON; kill by port.
-- [ ] **Step 6: commit** — `git add -A && git commit -m "feat(consied): http server wiring + smoke test"`
+- [ ] **Step 6: commit** — `git add -A && git commit -m "feat(health-mcp): http server wiring + smoke test"`
 
 ---
 
@@ -332,7 +332,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 - [ ] **Step 6:** src/api.ts — thin `fetch` wrapper (`const j=(u,o)=>fetch(u,o).then(r=>r.json())`) implementing the fns above against `/api/*`.
 - [ ] **Step 7:** src/main.tsx + src/App.tsx — React Router with 5 routes + a bottom/side nav (placeholder markup; styled in Task 8). Routes: `/` Today, `/exercises`, `/workouts`, `/meals`, `/trends`.
 - [ ] **Step 8:** `npm run build` succeeds -> `dist/` created.
-- [ ] **Step 9: commit** — `git add -A && git commit -m "feat(consied): frontend scaffold + api client"`
+- [ ] **Step 9: commit** — `git add -A && git commit -m "feat(health-mcp): frontend scaffold + api client"`
 
 ---
 
@@ -343,7 +343,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 - [ ] **Step 1:** Invoke the `/design-system` skill with brand = **Uber (Base Web)**; generate design tokens (color: near-black `#000`/`#141414` primary on white, one accent, greys; type: system/Uber-Move-like; spacing scale; small radii) and the shared component set listed above. Output goes to `src/theme` + `src/components`.
 - [ ] **Step 2:** Apply `AppShell` (top bar + responsive nav) in `App.tsx`; wire nav links.
 - [ ] **Step 3:** Verify build + a screenshot via `/browse` of `http://127.0.0.1:5175` (dev) shows the Uber look on desktop + mobile widths.
-- [ ] **Step 4: commit** — `git add -A && git commit -m "feat(consied): Uber/Base-Web design system"`
+- [ ] **Step 4: commit** — `git add -A && git commit -m "feat(health-mcp): Uber/Base-Web design system"`
 
 ---
 
@@ -355,7 +355,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 
 - [ ] **Step 1:** implement component using shared `Stat`/`Card` components + `api.getSummary`/`api.postSync`.
 - [ ] **Step 2:** acceptance — `/browse` dev URL: cards show real numbers; Sync button triggers a refetch; stale banner appears when OpenFit is stopped.
-- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(consied): Today screen"`
+- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(health-mcp): Today screen"`
 
 ---
 
@@ -368,7 +368,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 - [ ] **Step 1:** implement search + filters + results grid with image fallback.
 - [ ] **Step 2:** implement detail + "Log this workout" -> createWorkout, toast on success.
 - [ ] **Step 3:** acceptance — search "press" returns results; a broken GIF shows placeholder; logging creates a workout (verify on Workouts screen).
-- [ ] **Step 4: commit** — `git add -A && git commit -m "feat(consied): Exercises library + log-from-exercise"`
+- [ ] **Step 4: commit** — `git add -A && git commit -m "feat(health-mcp): Exercises library + log-from-exercise"`
 
 ---
 
@@ -380,7 +380,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 
 - [ ] **Step 1:** table + add form + edit/delete.
 - [ ] **Step 2:** acceptance — add/edit/delete round-trip visible; persists across reload (SQLite).
-- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(consied): Workouts log"`
+- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(health-mcp): Workouts log"`
 
 ---
 
@@ -392,7 +392,7 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 
 - [ ] **Step 1:** list + totals + add form + edit/delete.
 - [ ] **Step 2:** acceptance — adding a meal updates totals and the Today balance card.
-- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(consied): Meals log + daily totals"`
+- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(health-mcp): Meals log + daily totals"`
 
 ---
 
@@ -404,19 +404,19 @@ test('server smoke: exercises, workout, meal, summary', async () => {
 
 - [ ] **Step 1:** map OpenFit trend arrays to chart series (dateTime/value); overlay meal calIn per day for the in-vs-out chart.
 - [ ] **Step 2:** acceptance — charts render with real trend data; empty metrics show an empty-state, not a crash.
-- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(consied): Trends charts"`
+- [ ] **Step 3: commit** — `git add -A && git commit -m "feat(health-mcp): Trends charts"`
 
 ---
 
 ## Task 14: Production build + systemd service
 
-**Files:** Create `deploy/consied.service`
+**Files:** Create `deploy/health-mcp.service`
 
 - [ ] **Step 1:** `npm run build` -> `dist/`. Confirm `node server/index.cjs` serves the SPA at `/` and API at `/api/*` on 42815.
-- [ ] **Step 2:** write `deploy/consied.service`:
+- [ ] **Step 2:** write `deploy/health-mcp.service`:
 ```ini
 [Unit]
-Description=Consied health tracker
+Description=Health MCP health tracker
 After=network-online.target openfit.service
 Wants=network-online.target
 
@@ -424,20 +424,20 @@ Wants=network-online.target
 Type=simple
 User=saiteja
 Group=saiteja
-WorkingDirectory=/home/saiteja/consied
-Environment=CONSIED_DB=/home/saiteja/consied/.data/consied.sqlite
-ExecStart=/home/saiteja/.nvm/versions/node/v25.1.0/bin/node /home/saiteja/consied/server/index.cjs
+WorkingDirectory=/home/saiteja/health-mcp
+Environment=HEALTH_MCP_DB=/home/saiteja/health-mcp/.data/health-mcp.sqlite
+ExecStart=/home/saiteja/.nvm/versions/node/v25.1.0/bin/node /home/saiteja/health-mcp/server/index.cjs
 Restart=always
 RestartSec=3
-StandardOutput=append:/home/saiteja/consied/.data/consied.log
-StandardError=append:/home/saiteja/consied/.data/consied.log
+StandardOutput=append:/home/saiteja/health-mcp/.data/health-mcp.log
+StandardError=append:/home/saiteja/health-mcp/.data/health-mcp.log
 
 [Install]
 WantedBy=multi-user.target
 ```
-- [ ] **Step 3:** `sudo cp deploy/consied.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now consied`
-- [ ] **Step 4:** verify — `systemctl is-active consied` = active; `curl -s http://127.0.0.1:42815/api/status` returns JSON; `is-enabled` = enabled.
-- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(consied): systemd service"`
+- [ ] **Step 3:** `sudo cp deploy/health-mcp.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now health-mcp`
+- [ ] **Step 4:** verify — `systemctl is-active health-mcp` = active; `curl -s http://127.0.0.1:42815/api/status` returns JSON; `is-enabled` = enabled.
+- [ ] **Step 5: commit** — `git add -A && git commit -m "feat(health-mcp): systemd service"`
 
 ---
 
@@ -453,8 +453,8 @@ WantedBy=multi-user.target
 - [ ] **Step 2:** DNS route: `cloudflared tunnel route dns 7606260f-ec22-4a25-8dca-6a9a12f8288d health.saitejamothukuri.com` (creates the CNAME).
 - [ ] **Step 3:** ensure cloudflared runs as a service (it is currently **inactive**): confirm/create the systemd unit and `sudo systemctl enable --now cloudflared` (or the existing tunnel service name); `systemctl is-active` = active.
 - [ ] **Step 4:** In Cloudflare Zero Trust dashboard → Access → Applications: add `health.saitejamothukuri.com`, policy = allow email `saiteja.motukuri@gmail.com` (email OTP). (Manual dashboard step — document it; the user performs it.)
-- [ ] **Step 5:** verify — from an external device, `https://health.saitejamothukuri.com` prompts Cloudflare Access login, then loads Consied. Health data + logging work end to end.
-- [ ] **Step 6: commit** — `git add -A && git commit -m "feat(consied): cloudflare tunnel + access"`
+- [ ] **Step 5:** verify — from an external device, `https://health.saitejamothukuri.com` prompts Cloudflare Access login, then loads Health MCP. Health data + logging work end to end.
+- [ ] **Step 6: commit** — `git add -A && git commit -m "feat(health-mcp): cloudflare tunnel + access"`
 
 ---
 

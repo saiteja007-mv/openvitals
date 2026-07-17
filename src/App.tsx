@@ -43,13 +43,13 @@ export default function App() {
   useEffect(() => {
     api.me().then(() => setAuthed(true)).catch(() => setAuthed(false))
     const onUnauthed = () => setAuthed(false)
-    window.addEventListener('consied:unauthorized', onUnauthed)
-    return () => window.removeEventListener('consied:unauthorized', onUnauthed)
+    window.addEventListener('health-mcp:unauthorized', onUnauthed)
+    return () => window.removeEventListener('health-mcp:unauthorized', onUnauthed)
   }, [])
 
   if (authed === null) return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-      <div className="brand" style={{ fontSize: 28 }}>Consied<span style={{ color: 'var(--mute)' }}>.</span></div>
+      <div className="brand" style={{ fontSize: 28 }}>Health MCP<span style={{ color: 'var(--mute)' }}>.</span></div>
       <span className="spin spin-dark" />
     </div>
   )
@@ -58,7 +58,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="appbar">
-        <NavLink to="/" end className="brand" aria-label="Consied — Today">Consied<span>.</span></NavLink>
+        <NavLink to="/" end className="brand" aria-label="Health MCP — Today">Health MCP<span>.</span></NavLink>
         <nav className="topnav">
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>

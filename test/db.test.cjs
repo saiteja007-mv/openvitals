@@ -127,7 +127,7 @@ test('body metrics: upsert by date + list + delete', () => {
 })
 
 test('body metric photo: save private file + resolve path, rejects traversal', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consied-test-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'health-mcp-test-'))
   db.initDb(path.join(dir, 'test.sqlite'))
   const png1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
   const ref = db.savePhoto(png1x1)

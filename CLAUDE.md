@@ -1,9 +1,9 @@
-# Consied — project instructions
+# Health MCP — project instructions
 
 **Before starting any work, read [`session_handoff.md`](./session_handoff.md) for the current state and where to resume.** Update it at the end of a working session.
 
 ## Stack & commands
-- React + Vite + TypeScript front end (`src/`); node:sqlite backend (`server/`). DB at `.data/consied.sqlite`.
+- React + Vite + TypeScript front end (`src/`); node:sqlite backend (`server/`). DB at `.data/health-mcp.sqlite`.
 - Run: `npm run server` + `npm run dev`. Verify: `npx tsc --noEmit` and `node --test` (must stay green); `npx vite build` for a full check.
 
 ## Design

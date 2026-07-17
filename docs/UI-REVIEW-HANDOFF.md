@@ -1,4 +1,4 @@
-# Consied UI Review — Implementation Handoff
+# Health MCP UI Review — Implementation Handoff
 
 > Resume point for the 68-finding UI enhancement pass. Full interactive triage doc (artifact):
 > https://claude.ai/code/artifact/53d663cf-0b0d-4b91-a28b-f5d1dafd59d9
@@ -11,9 +11,9 @@
 - **Exercises** — full modal focus-*trap* (focus-on-open + Escape + restore are done; Tab can still leave the dialog).
 
 ## How to resume
-1. `cd ~/consied` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
+1. `cd ~/health-mcp` — the app is React + Vite (frontend) + node:sqlite backend (`server/`).
 2. After edits: `npx tsc --noEmit` (frontend typecheck) and `node --test` (backend, 66 tests). Both must stay green.
-3. Run locally: `npm run server` (backend :PORT) + `npm run dev` (Vite). DB at `.data/consied.sqlite`.
+3. Run locally: `npm run server` (backend :PORT) + `npm run dev` (Vite). DB at `.data/health-mcp.sqlite`.
 4. Pick the next unchecked `[ ]` item below (they are ordered High→Low within each screen). Work screen-by-screen; keep diffs small; re-run tsc+tests after each screen; update this file's checkboxes + progress count.
 
 ## Already shipped this session (Batches A–K committed on `ui-review-batches`)

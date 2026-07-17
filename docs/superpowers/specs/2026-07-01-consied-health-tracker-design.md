@@ -1,4 +1,4 @@
-# Consied — Health Tracker · Design Spec
+# Health MCP — Health Tracker · Design Spec
 
 > Date: 2026-07-01 · Status: Approved (design) · Host: ideapad
 
@@ -11,14 +11,14 @@ Single-user health tracking web app served on **ideapad**, exposed via Cloudflar
 - **Storage:** SQLite local file on ideapad (`better-sqlite3`).
 - **Auth:** Cloudflare Access (email OTP) enforced at the edge.
 - **Stack:** React + Vite + TypeScript frontend; Node backend. Single origin — backend serves the built SPA AND proxies OpenFit.
-- **Name:** "Consied". **Exercise GIFs:** use each record's `gif_url` (exercisedb CDN) with a placeholder fallback.
+- **Name:** "Health MCP". **Exercise GIFs:** use each record's `gif_url` (exercisedb CDN) with a placeholder fallback.
 
 ## 3. Architecture
 ```
 Browser (React SPA, Uber/Base-Web UI)
       │  one origin
       ▼
-Consied backend (Node + SQLite)   ideapad:42815
+Health MCP backend (Node + SQLite)   ideapad:42815
    ├── serves built frontend (dist/)
    ├── GET  /api/health    -> proxy OpenFit :42813 /api/cached  (Google Health, read-only)
    ├── POST /api/sync      -> proxy OpenFit /api/sync           ("update the data")
@@ -79,7 +79,7 @@ CREATE INDEX idx_meals_eaten ON meals(eaten_at);
 Produced via the `/design-system` skill at build time. Principles: high contrast, black primary on white, one accent, functional and data-dense, small radii, clear tabular data, minimal charts. Mobile-first responsive (used on phone and desktop).
 
 ## 9. Deploy
-- `consied.service` (systemd, `User=saiteja`, `Restart=always`) running the Node backend.
+- `health-mcp.service` (systemd, `User=saiteja`, `Restart=always`) running the Node backend.
 - `vite build` -> `dist/` served by the backend (single port 42815).
 - Cloudflare tunnel: add ingress `health.saitejamothukuri.com -> http://localhost:42815` in `~/.cloudflared/config.yml`. NOTE: `cloudflared` service is currently **inactive** — must be (re)enabled/installed as a service.
 - Cloudflare Access: email-OTP policy on the hostname, allow owner email only.
@@ -97,5 +97,5 @@ One smoke self-check (assert-based): exercises search returns hits; workout + me
 Food-database / barcode / photo meal logging; multi-user; self-hosting exercise media; push reminders; PWA offline; writing data back to Google Health.
 
 ## 13. Open items / defaults
-- Name "Consied" (assumed; rename trivial).
+- Name "Health MCP" (assumed; rename trivial).
 - exercisedb CDN GIF reliability (fallback handles failures).

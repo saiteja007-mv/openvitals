@@ -185,7 +185,7 @@ function ExportSection({ show }: { show: (m: string) => void }) {
 
   const exportJson = async () => {
     const data = await api.exportJson()
-    downloadJson(`consied-backup-${new Date().toISOString().slice(0, 10)}.json`, data)
+    downloadJson(`health-mcp-backup-${new Date().toISOString().slice(0, 10)}.json`, data)
     show('Backup downloaded')
   }
   const exportCsv = () => window.open(api.exportCsvUrl(table), '_blank')
@@ -233,7 +233,7 @@ function LogoutButton() {
   const [loading, setLoading] = useState(false)
   const logout = async () => {
     setLoading(true)
-    try { await api.logout() } finally { window.dispatchEvent(new Event('consied:unauthorized')) }
+    try { await api.logout() } finally { window.dispatchEvent(new Event('health-mcp:unauthorized')) }
   }
   return <Button variant="danger" onClick={logout} loading={loading}>Log out</Button>
 }

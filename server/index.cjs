@@ -16,7 +16,7 @@ const crypto = require('node:crypto')
 
 // MCP bearer token: env override, else generated once and persisted beside the DB.
 function resolveMcpToken(dataDir) {
-  if (process.env.CONSIED_MCP_TOKEN) return process.env.CONSIED_MCP_TOKEN
+  if (process.env.HEALTH_MCP_TOKEN) return process.env.HEALTH_MCP_TOKEN
   if (!dataDir) return crypto.randomBytes(32).toString('hex')
   const file = path.join(dataDir, 'mcp-token.txt')
   try { const t = fs.readFileSync(file, 'utf8').trim(); if (t) return t } catch {}
@@ -114,7 +114,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       if (p.startsWith('/api/') && !auth.authed(req)) return sendJson(res, 401, { error: 'unauthorized' })
       if (p === '/api/me' && m === 'GET') return sendJson(res, 200, { ok: true })
 
-      if (p === '/api/status' && m === 'GET') return sendJson(res, 200, { app: 'consied', googleHealth: await googleHealth.getStatus() })
+      if (p === '/api/status' && m === 'GET') return sendJson(res, 200, { app: 'health-mcp', googleHealth: await googleHealth.getStatus() })
       if (p === '/api/health' && m === 'GET') return sendJson(res, 200, await googleHealth.getHealth())
       if (p === '/api/sync' && m === 'POST') return sendJson(res, 200, await googleHealth.sync())
 
@@ -258,7 +258,7 @@ function createServer({ dbFile, exercisesJson, distDir }) {
         const due = reminderEngine.dueReminders(list, log, now)
         const results = []
         for (const r of due) {
-          const outcome = await reminderEngine.sendReminder(r, `Consied reminder: ${r.kind}`)
+          const outcome = await reminderEngine.sendReminder(r, `Health MCP reminder: ${r.kind}`)
           db.logReminderAttempt(r.id, today, outcome.status, outcome.detail)
           results.push({ reminderId: r.id, kind: r.kind, ...outcome })
         }
@@ -305,7 +305,7 @@ if (require.main === module) {
   const root = path.join(__dirname, '..')
   const port = Number(process.env.PORT || 42815)
   createServer({
-    dbFile: process.env.CONSIED_DB || path.join(root, '.data', 'consied.sqlite'),
+    dbFile: process.env.HEALTH_MCP_DB || path.join(root, '.data', 'health-mcp.sqlite'),
     exercisesJson: path.join(root, 'data', 'exercises.json'),
     distDir: path.join(root, 'dist'),
   }).listen(port, '127.0.0.1', () => console.log('health-mcp on http://127.0.0.1:' + port))

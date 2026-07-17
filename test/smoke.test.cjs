@@ -10,15 +10,15 @@ test('server smoke: exercises, workout, meal, summary', async () => {
   })
   await new Promise((r) => stub.listen(0, '127.0.0.1', r))
   process.env.OPENFIT_URL = 'http://127.0.0.1:' + stub.address().port
-  process.env.CONSIED_NO_AUTH = '1' // this file exercises feature endpoints, not the auth gate (see auth.test.cjs / smoke auth test below)
+  process.env.HEALTH_MCP_NO_AUTH = '1' // this file exercises feature endpoints, not the auth gate (see auth.test.cjs / smoke auth test below)
 
   // openfit.cjs now calls Google Health directly; inject a mock so the smoke stays offline.
   const fs = require('node:fs'), os = require('node:os')
-  const gdir = fs.mkdtempSync(path.join(os.tmpdir(), 'consied-gh-'))
+  const gdir = fs.mkdtempSync(path.join(os.tmpdir(), 'health-mcp-gh-'))
   fs.writeFileSync(path.join(gdir, 's.json'), JSON.stringify({ installed: { client_id: 'x', client_secret: 'y' } }))
   fs.writeFileSync(path.join(gdir, 'c.json'), JSON.stringify({ token: { access_token: 'a', refresh_token: 'r', expiresAt: Date.now() + 3_600_000 } }))
   process.env.GOOGLE_HEALTH_SECRETS = path.join(gdir, 's.json')
-  process.env.CONSIED_GH_CREDENTIALS = path.join(gdir, 'c.json')
+  process.env.HEALTH_MCP_GH_CREDENTIALS = path.join(gdir, 'c.json')
   require('../server/googlehealth.cjs').__setGoogleHealthForTest({
     refreshAccessToken: async () => ({ access_token: 'a', expiresAt: Date.now() + 3_600_000 }),
     syncData: async () => ({ date: '2026-07-01', endpoints: { activity: { summary: { steps: 8000, caloriesOut: 2400 } } }, requestStats: { total: 10, succeeded: 10 } }),
@@ -121,12 +121,12 @@ test('server smoke: exercises, workout, meal, summary', async () => {
   } finally {
     await new Promise((r) => srv.close(r))
     await new Promise((r) => stub.close(r))
-    delete process.env.CONSIED_NO_AUTH
+    delete process.env.HEALTH_MCP_NO_AUTH
   }
 })
 
 test('server smoke: redirects Cloudflare http visitors to https before routing', async () => {
-  process.env.CONSIED_NO_AUTH = '1'
+  process.env.HEALTH_MCP_NO_AUTH = '1'
   const { createServer } = require('../server/index.cjs')
   const srv = createServer({
     dbFile: ':memory:',
@@ -145,13 +145,13 @@ test('server smoke: redirects Cloudflare http visitors to https before routing',
     assert.equal(res.headers.get('location'), 'https://health.example.com/api/status?x=1')
   } finally {
     await new Promise((r) => srv.close(r))
-    delete process.env.CONSIED_NO_AUTH
+    delete process.env.HEALTH_MCP_NO_AUTH
   }
 })
 
 test('server smoke: auth gate blocks by default; login cookie grants access; logout revokes it', async () => {
-  delete process.env.CONSIED_NO_AUTH
-  process.env.CONSIED_PASSWORD = 'smoke-test-pw'
+  delete process.env.HEALTH_MCP_NO_AUTH
+  process.env.HEALTH_MCP_PASSWORD = 'smoke-test-pw'
   const { createServer } = require('../server/index.cjs')
   const srv = createServer({
     dbFile: ':memory:',
@@ -180,6 +180,6 @@ test('server smoke: auth gate blocks by default; login cookie grants access; log
     assert.equal(afterLogout.status, 401)
   } finally {
     await new Promise((r) => srv.close(r))
-    delete process.env.CONSIED_PASSWORD
+    delete process.env.HEALTH_MCP_PASSWORD
   }
 })

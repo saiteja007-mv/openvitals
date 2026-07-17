@@ -1,5 +1,5 @@
 // Google Health — DIRECT API access. Replaces the old openfit :42813 backend bridge:
-// consied now refreshes the OAuth token and calls the Google Health API itself, so the
+// health-mcp now refreshes the OAuth token and calls the Google Health API itself, so the
 // data is live/original from the health endpoints (no cached app layer in between).
 // Reuses the shared OAuth client secret + a local copy of the refresh token → no re-login.
 // (Filename kept as openfit.cjs to avoid churn; it no longer talks to any openfit backend.)
@@ -10,7 +10,7 @@ const os = require('node:os')
 let googleHealth = require('./google-health-service.cjs')
 
 const SECRETS_FILE = process.env.GOOGLE_HEALTH_SECRETS || path.join(os.homedir(), '.hermes', 'secrets', 'google-health-client.json')
-const CRED_FILE = process.env.CONSIED_GH_CREDENTIALS || path.join(__dirname, '..', '.data', 'google-health-credentials.json')
+const CRED_FILE = process.env.HEALTH_MCP_GH_CREDENTIALS || path.join(__dirname, '..', '.data', 'google-health-credentials.json')
 
 let lastGood = null
 
@@ -38,7 +38,7 @@ async function validToken(creds, config) {
   return updated
 }
 
-const TTL_MS = Number(process.env.CONSIED_HEALTH_TTL_MS ?? 60_000) // reuse a fresh pull for TTL ms so rapid tool calls don't hammer the Google API (rate limits); 0 disables
+const TTL_MS = Number(process.env.HEALTH_MCP_HEALTH_TTL_MS ?? 60_000) // reuse a fresh pull for TTL ms so rapid tool calls don't hammer the Google API (rate limits); 0 disables
 let cache = null // { at, date, payload }
 
 async function pull(date, { force = false } = {}) {
@@ -56,7 +56,7 @@ async function pull(date, { force = false } = {}) {
   return payload
 }
 
-// Same interface the rest of consied expects (getHealth / sync / getStatus).
+// Same interface the rest of health-mcp expects (getHealth / sync / getStatus).
 async function getHealth() {
   try { return { stale: false, data: await pull(localIsoDate()) } }
   catch { return { stale: true, data: lastGood } }

@@ -1,4 +1,4 @@
-# Session Handoff — Consied
+# Session Handoff — Health MCP
 
 > **Read this first at the start of every session** for current state and where to resume.
 > Detailed 68-item UI checklist lives in `docs/UI-REVIEW-HANDOFF.md`.
@@ -6,13 +6,13 @@
 _Last updated: 2026-07-16._
 
 ## ⚡ Now an MCP server (2026-07-16, branch `mcp-conversion`)
-The webapp is being retired — consied now serves its health data as an **MCP server** at `https://health.saitejamothukuri.com/mcp` (Streamable HTTP, **bearer-token** auth, **60 tools** over `db.cjs` + Google-Health reads — expanded 2026-07-16 from 16: all Google-Health data points [sleep/heart/hydration/glucose/SpO2/nutrition/etc., read-only — Google Health has **no write API**], full meals+nutrition+food-search, new **hydration** table/tools, exercise catalog, workout-plan CRUD, reminders, goals, export). Code: `server/mcp.mjs` + the `/mcp` route added to `server/index.cjs`; the SPA is no longer served (React `src/` still in the tree, NOT deleted — physical removal is a pending cleanup). Runs as **systemd user service `consied-mcp`** (linger on, `Restart=always`). Token persisted at `.data/mcp-token.txt` (env `CONSIED_MCP_TOKEN` overrides). Backend tests still green (66). Google-OAuth gating is a planned upgrade; today it's bearer-token. Verified end-to-end with a real MCP client over the public URL.
+The webapp is being retired — health-mcp now serves its health data as an **MCP server** at `https://health.saitejamothukuri.com/mcp` (Streamable HTTP, **bearer-token** auth, **60 tools** over `db.cjs` + Google-Health reads — expanded 2026-07-16 from 16: all Google-Health data points [sleep/heart/hydration/glucose/SpO2/nutrition/etc., read-only — Google Health has **no write API**], full meals+nutrition+food-search, new **hydration** table/tools, exercise catalog, workout-plan CRUD, reminders, goals, export). Code: `server/mcp.mjs` + the `/mcp` route added to `server/index.cjs`; the SPA is no longer served (React `src/` still in the tree, NOT deleted — physical removal is a pending cleanup). Runs as **systemd user service `health-mcp`** (linger on, `Restart=always`). Token persisted at `.data/mcp-token.txt` (env `HEALTH_MCP_TOKEN` overrides). Backend tests still green (66). Google-OAuth gating is a planned upgrade; today it's bearer-token. Verified end-to-end with a real MCP client over the public URL.
 
 **Direct Google Health (2026-07-16):** `server/openfit.cjs` was rebuilt to call the **Google Health API directly** (live/original data) instead of proxying the old openfit backend on :42813 — that backend is **retired/stopped**. It reuses the shared OAuth client (`~/.hermes/secrets/google-health-client.json`) + a local token copy (`.data/google-health-credentials.json`, gitignored) so **no re-login**; the Google Health service code is vendored at `server/google-health-service.cjs`. Google Health stays read-only. `~/openfit` repo left intact (only its backend process stopped).
 
 ## Project at a glance
 Single-user health tracker. **React + Vite + TypeScript** front end (`src/`), **node:sqlite** backend (`server/`), Uber/Base-Web **strict-monochrome** design (black/white/greys, Inter, pill buttons, inset-hairline cards — no second accent color).
-- Run: `npm run server` (backend) + `npm run dev` (Vite). DB at `.data/consied.sqlite`.
+- Run: `npm run server` (backend) + `npm run dev` (Vite). DB at `.data/health-mcp.sqlite`.
 - Verify after edits: `npx tsc --noEmit` (frontend) + `node --test` (backend, 66 tests). Both must stay green. `npx vite build` for a full build check.
 - Note: the browser/Chrome tool can't reach `localhost`, so live UI click-through must be done by the user via `npm run dev`.
 
@@ -33,5 +33,5 @@ Single-user health tracker. **React + Vite + TypeScript** front end (`src/`), **
 - Pre-existing `summary.*` changes to resolve.
 - Not pushed — offer `git push` / branch cleanup if the user wants it remote.
 
-## Non-Consied context from this session
+## Non-Health MCP context from this session
 Home-infra: NordVPN + Tailscale coexistence on the Inspiron is PLANNED (see the user's memory `inspiron-nordvpn-tailscale-coexist`), unrelated to this repo.

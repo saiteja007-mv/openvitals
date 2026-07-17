@@ -6,7 +6,7 @@ import type {
 
 async function j<T>(url: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(url, opts)
-  if (r.status === 401) { window.dispatchEvent(new Event('consied:unauthorized')); throw new Error('unauthorized') }
+  if (r.status === 401) { window.dispatchEvent(new Event('health-mcp:unauthorized')); throw new Error('unauthorized') }
   if (!r.ok) throw new Error('request failed: ' + r.status)
   return r.json() as Promise<T>
 }

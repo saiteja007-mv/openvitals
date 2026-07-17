@@ -14,7 +14,7 @@ const certFile = `${tlsDir}/cert.pem`
 if (!existsSync(keyFile) || !existsSync(certFile)) {
   mkdirSync(tlsDir, { recursive: true })
   execSync(
-    `openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -subj "/CN=consied-dev" -keyout ${keyFile} -out ${certFile}`,
+    `openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -subj "/CN=health-mcp-dev" -keyout ${keyFile} -out ${certFile}`,
     { stdio: 'ignore' },
   )
 }
