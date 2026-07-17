@@ -12,6 +12,18 @@ const weekly = require('./weekly.cjs')
 const recommend = require('./recommend.cjs')
 const reminderEngine = require('./reminders.cjs')
 const food = require('./food.cjs')
+const crypto = require('node:crypto')
+
+// MCP bearer token: env override, else generated once and persisted beside the DB.
+function resolveMcpToken(dataDir) {
+  if (process.env.CONSIED_MCP_TOKEN) return process.env.CONSIED_MCP_TOKEN
+  if (!dataDir) return crypto.randomBytes(32).toString('hex')
+  const file = path.join(dataDir, 'mcp-token.txt')
+  try { const t = fs.readFileSync(file, 'utf8').trim(); if (t) return t } catch {}
+  const t = crypto.randomBytes(32).toString('hex')
+  try { fs.writeFileSync(file, t + '\n', { mode: 0o600 }) } catch {}
+  return t
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -56,6 +68,9 @@ function createServer({ dbFile, exercisesJson, distDir }) {
   exercises.loadExercises(exercisesJson)
   auth.init(dbFile === ':memory:' ? null : path.dirname(dbFile))
 
+  const mcpToken = resolveMcpToken(dbFile === ':memory:' ? null : path.dirname(dbFile))
+  let mcpHandler = null
+
   return http.createServer(async (req, res) => {
     try {
       // Cloudflare terminates TLS and forwards the original visitor scheme here.
@@ -73,6 +88,17 @@ function createServer({ dbFile, exercisesJson, distDir }) {
       const m = req.method
       const q = u.searchParams
       const seg = p.split('/').filter(Boolean)
+
+      // MCP endpoint — bearer-gated, bypasses the browser cookie-auth gate.
+      if (p === '/mcp' || p.startsWith('/mcp/')) {
+        if (!mcpHandler) {
+          const { createMcpHandler } = await import('./mcp.mjs')
+          mcpHandler = createMcpHandler({ db, openfit, summary, weekly, progress, token: mcpToken })
+        }
+        let raw = ''
+        if (m === 'POST') { for await (const chunk of req) raw += chunk }
+        return mcpHandler(req, res, raw)
+      }
 
       // --- auth: login/logout always reachable; every other /api/* route requires a session ---
       if (p === '/api/login' && m === 'POST') {
@@ -264,7 +290,9 @@ function createServer({ dbFile, exercisesJson, distDir }) {
 
       if (p.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' })
       if (p.startsWith('/media/')) return serveStatic(res, path.join(__dirname, '..', 'media'), p.slice('/media'.length))
-      return serveStatic(res, distDir, p)
+      // Webapp removed — this service is now an MCP server; no SPA is served.
+      if (p === '/' || p === '') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('consied MCP server — POST /mcp with a bearer token to connect an AI client.') }
+      res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: 'not found', hint: 'This is an MCP server; use POST /mcp with a bearer token.' }))
     } catch (e) {
       sendJson(res, 500, { error: e.message })
     }

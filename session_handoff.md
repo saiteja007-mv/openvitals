@@ -3,7 +3,10 @@
 > **Read this first at the start of every session** for current state and where to resume.
 > Detailed 68-item UI checklist lives in `docs/UI-REVIEW-HANDOFF.md`.
 
-_Last updated: 2026-07-04._
+_Last updated: 2026-07-16._
+
+## ⚡ Now an MCP server (2026-07-16, branch `mcp-conversion`)
+The webapp is being retired — consied now serves its health data as an **MCP server** at `https://health.saitejamothukuri.com/mcp` (Streamable HTTP, **bearer-token** auth, **16 tools** over `db.cjs` + Google-Health sync). Code: `server/mcp.mjs` + the `/mcp` route added to `server/index.cjs`; the SPA is no longer served (React `src/` still in the tree, NOT deleted — physical removal is a pending cleanup). Runs as **systemd user service `consied-mcp`** (linger on, `Restart=always`). Token persisted at `.data/mcp-token.txt` (env `CONSIED_MCP_TOKEN` overrides). Backend tests still green (66). Google-OAuth gating is a planned upgrade; today it's bearer-token. Verified end-to-end with a real MCP client over the public URL.
 
 ## Project at a glance
 Single-user health tracker. **React + Vite + TypeScript** front end (`src/`), **node:sqlite** backend (`server/`), Uber/Base-Web **strict-monochrome** design (black/white/greys, Inter, pill buttons, inset-hairline cards — no second accent color).
