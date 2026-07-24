@@ -1,54 +1,76 @@
-<p align="center">
-  <img src="media/openvitals-banner.png" alt="OpenVitals — self-hosted Google Health data, for your AI" width="100%">
-</p>
+<div align="center">
 
-# OpenVitals
+<img src="media/openvitals-banner.png" alt="OpenVitals — self-hosted Google Health data, for your AI" width="100%">
 
-**Your Google Health data as a self-hosted MCP server** — so any AI client (Claude, or anything that speaks [MCP](https://modelcontextprotocol.io)) can read your heart rate, sleep, workouts, nutrition, body metrics and more, and reason over them for you.
+<h1>OpenVitals</h1>
 
-It's a small Node server. It pulls your data from the Google Health API, keeps it in a local SQLite file, and exposes ~60 tools over `POST /mcp` behind a bearer token.
+**Your Google Health data as a self-hosted [MCP](https://modelcontextprotocol.io) server** — so ChatGPT, Claude, or any MCP-capable AI can read your heart, sleep, workouts & nutrition and reason over them. On your hardware. No subscription.
 
----
+![MCP](https://img.shields.io/badge/MCP-Model_Context_Protocol-000000)
+![Node](https://img.shields.io/badge/Node-22%2B-5FA04E?logo=node.js&logoColor=white)
+![Google Health](https://img.shields.io/badge/Google_Health-read--only-4285F4?logo=google&logoColor=white)
+![Self-hosted](https://img.shields.io/badge/Self--hosted-100%25-34A853)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
-## Why? Because Google's AI is too costly
-
-Google will happily analyze your health data for you — behind a paid product. As an individual (not a company) you don't want a subscription just to ask *"how did I sleep this week vs. last?"*.
-
-OpenVitals flips it around: **you** own a free Google Cloud project, **you** hold the OAuth secrets, and your data stays on **your** machine. The "AI" is whatever MCP client you already have. No per-query bill, no data leaving your box.
+</div>
 
 ---
 
-## How it works
+## Because Google's AI is too costly
+
+Google will analyze your health data for you — behind a paid product. As an individual (not a company), you shouldn't need a subscription just to ask *"how did I sleep this week vs. last?"*
+
+|  | Google's paid AI | **OpenVitals** |
+|---|---|---|
+| **Cost** | Monthly subscription | Free — uses the AI you already have |
+| **Your data** | Leaves your device | Stays in a local SQLite file on your box |
+| **Secrets** | Enterprise setup | Your own free Google Cloud OAuth client |
+| **The AI** | Locked to their product | Any MCP client — Claude, ChatGPT, Cursor… |
+
+You own the Google Cloud project, you hold the OAuth secrets, your data never leaves your machine. The "AI" is whatever MCP client you already pay for (or run free).
+
+---
+
+## ✨ What you get
+
+- 🩺 **~60 MCP tools** over your real Google Health data — heart, sleep, activity, glucose, SpO₂, temperature, ECG, body composition
+- 🍎 **Nutrition & workouts** — log meals, search foods, barcode lookup, recipes, workout plans, exercise search
+- 📈 **Insights** — daily/weekly summaries, progress, recommendations, plan-vs-logged comparison
+- 🔒 **Read-only** Google scopes; every secret stays local and gitignored
+- 🏠 **Runs anywhere** always-on — an old laptop, a Raspberry Pi, a mini-PC
+- 🔌 **Any MCP client** — local (Claude Code, Cursor) or cloud (ChatGPT, Claude apps) via a tunnel
+
+---
+
+## 🔌 How it works
 
 ```
 Google Health API  ──►  OpenVitals server  ──►  SQLite (your machine)
    (your data)         (always-on device)              │
                                                         ▼
                               your AI client  ◄──  POST /mcp  (bearer token)
-                            (Claude, etc.)        localhost, or a public URL
+                          (Claude · ChatGPT)     localhost, or a public URL
 ```
 
 Three things you need:
 
-1. **A continuous / always-on device.** The server has to be running for your AI client to reach it and to sync fresh data from Google Health. A spare laptop, a Raspberry Pi, a mini-PC — anything that stays on. (This repo runs on a laptop-as-homelab-server.)
-
-2. **Your own Google Cloud + Health secrets.** You are not a company and shouldn't pay enterprise prices — so you create a **free** Google Cloud OAuth client yourself and drop the secret file in place. OpenVitals uses it to log in to *your* Google Health account with read-only scopes. Nothing is shared with anyone.
-
-3. **(Optional) A domain + a tunnel for a public URL.** By default the server only listens on `127.0.0.1`, so it works from the same machine. If you want to reach it from your phone or a cloud AI, and you have a domain, point a **Cloudflare Tunnel** (or Tailscale, ngrok, an SSH tunnel — any method) at the local port. No open ports on your router.
+1. **An always-on device.** The server must be running for your AI to reach it and sync fresh data. Anything that stays on. *(This repo runs on a laptop-as-homelab-server.)*
+2. **Your own free Google Cloud + Health secrets.** You create a free OAuth client and drop the file in place. OpenVitals uses it to read *your* Google Health with read-only scopes.
+3. **(Only for cloud apps) a public URL.** No domain required — a free **ngrok** / Cloudflare / Tailscale tunnel gives you an HTTPS URL in one command.
 
 ---
 
-## Setup
+## 🚀 Quickstart
 
 ### Prerequisites
-- **Node 22+** (uses the built-in `node:sqlite`).
-- A Google account with data in Google Health.
+- **Node 22+** (uses the built-in `node:sqlite`)
+- A Google account with data in Google Health
 
-### 1. Create your Google Cloud secrets (free)
+### 1 — Create your Google Cloud secrets (free)
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/) → create a **new project** (free).
+1. [Google Cloud Console](https://console.cloud.google.com/) → **New project** (free).
 2. **APIs & Services → Enable APIs** → enable the **Google Health API**.
-3. **OAuth consent screen** → **External** → add your own Google account as a **Test user** (so you don't need Google verification for personal use).
+3. **OAuth consent screen** → **External** → add your own Google account as a **Test user** (no Google verification needed for personal use).
 4. Add these **read-only** scopes (OpenVitals never asks for write access):
    ```
    openid  profile
@@ -62,99 +84,195 @@ Three things you need:
    googlehealth.location.readonly
    googlehealth.settings.readonly
    ```
-5. **Credentials → Create credentials → OAuth client ID → Desktop app** (or Web).
-6. Add this **Authorized redirect URI**:
-   ```
-   http://127.0.0.1:42813/oauth/callback
-   ```
-7. **Download** the client JSON and save it here:
-   ```
-   ~/.hermes/secrets/google-health-client.json
-   ```
-   (or put it anywhere and point `GOOGLE_HEALTH_SECRETS` at it).
+5. **Credentials → Create credentials → OAuth client ID → Desktop app**.
+6. Add this **Authorized redirect URI**: `http://127.0.0.1:42813/oauth/callback`
+7. **Download** the client JSON → save it as `~/.hermes/secrets/google-health-client.json` (or point `GOOGLE_HEALTH_SECRETS` at it).
 
-### 2. Install & run the server
+### 2 — Install & run
 
 ```bash
 git clone https://github.com/saiteja007-mv/openvitals.git
 cd openvitals
 npm install
-npm run build        # builds the web UI
-npm run server       # starts on http://127.0.0.1:42815
+npm run build      # builds the web UI
+npm run server     # → http://127.0.0.1:42815
 ```
 
-### 3. Connect your Google Health account (one-time)
+### 3 — Connect Google Health (one-time)
 
-Do the OAuth login once to authorize OpenVitals. This stores a **refresh token** in:
-```
-.data/google-health-credentials.json
-```
-From then on the server refreshes the token automatically — no repeated logins. Trigger a data pull any time with the `sync_google_health` tool or `POST /api/sync`.
+Do the OAuth login once to authorize OpenVitals. It stores a **refresh token** in `.data/google-health-credentials.json` and refreshes it automatically forever after. Pull data any time with the `sync_google_health` tool or `POST /api/sync`.
 
-> Tip: if a login is rejected, disconnect any datacenter VPN first — Google blocks OAuth from datacenter exit IPs.
+> 💡 If a login is rejected, disconnect any datacenter VPN first — Google blocks OAuth from datacenter exit IPs.
 
-### 4. Connect your AI client to the MCP
+### 4 — Grab your MCP token
 
-Grab the bearer token the server generated:
 ```bash
 cat .data/mcp-token.txt
 ```
+This bearer token guards `/mcp`. You'll paste it into your AI client below.
 
-Point your MCP client at the endpoint with that token:
+---
 
-- **Endpoint:** `http://127.0.0.1:42815/mcp`
-- **Auth:** `Authorization: Bearer <token>`
+## 🌐 Make it reachable
 
-Example Claude Code entry:
+**Which clients need a public URL?** It depends on where the client runs:
+
+| Client | Runs… | Endpoint it can reach |
+|---|---|---|
+| Claude Code, Cursor, Windsurf, Cline | **on your machine** | `http://127.0.0.1:42815/mcp` — **no tunnel needed** |
+| Claude app (custom connector), ChatGPT | **in the vendor's cloud** | needs a **public HTTPS URL** ↓ |
+
+> ⚠️ The Claude and ChatGPT apps connect to a custom connector **from Anthropic's / OpenAI's cloud, not your device** — so `localhost` is invisible to them. You need a public URL. You do **not** need to own a domain — any of these gives you a free one:
+
+<details>
+<summary><b>ngrok</b> — one command, no domain, no account setup</summary>
+
+```bash
+ngrok http 42815
+```
+Copy the `https://<random>.ngrok-free.app` it prints. Your MCP URL is:
+```
+https://<random>.ngrok-free.app/mcp?token=<your-token>
+```
+- The free URL changes on every restart. For a stable one, claim ngrok's **1 free static domain**: `ngrok http --url=your-name.ngrok-free.app 42815`.
+- ngrok's free tier shows a browser warning page; MCP clients (non-browser) usually bypass it automatically.
+</details>
+
+<details>
+<summary><b>Cloudflare Tunnel</b> — free random <code>*.trycloudflare.com</code>, no domain, no account</summary>
+
+```bash
+cloudflared tunnel --url http://localhost:42815
+```
+Use the printed `https://<random>.trycloudflare.com/mcp?token=<your-token>`. If you *do* own a domain, run a named tunnel for a stable `https://health.yourdomain.com`.
+</details>
+
+<details>
+<summary><b>Tailscale Funnel</b> — stable <code>*.ts.net</code> HTTPS URL</summary>
+
+```bash
+tailscale funnel 42815
+```
+Gives a public `https://<machine>.<tailnet>.ts.net/mcp?token=<your-token>` backed by your Tailscale identity.
+</details>
+
+---
+
+## 🤖 Connect your AI app
+
+Two ways to authenticate, both accepted by the server:
+- **Header:** `Authorization: Bearer <token>` — for clients with a headers field.
+- **URL token:** `…/mcp?token=<token>` — for connector dialogs with **no** header field (ChatGPT, Claude custom connector).
+
+<details open>
+<summary><b>Claude Code</b> (local — no tunnel)</summary>
+
 ```bash
 claude mcp add --transport http openvitals http://127.0.0.1:42815/mcp \
   --header "Authorization: Bearer <token>"
 ```
+</details>
 
-Ask your AI things like *"summarize my sleep this week"*, *"how many calories am I averaging?"*, *"log a 5 km run"*.
+<details>
+<summary><b>Claude app</b> (Desktop / claude.ai)</summary>
 
-### 5. (Optional) Expose it with a public URL
-
-If you have a domain and want to reach OpenVitals from anywhere (e.g. a cloud AI or your phone):
-
-```bash
-# Cloudflare Tunnel — maps a hostname to the local port, no router changes
-cloudflared tunnel --url http://127.0.0.1:42815
+**Option A — local bridge (reaches localhost, no tunnel).** Edit `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "openvitals": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:42815/mcp",
+               "--header", "Authorization: Bearer <token>"]
+    }
+  }
+}
 ```
-Then use `https://health.yourdomain.com/mcp` as the endpoint instead of localhost. Tailscale, ngrok, or an SSH reverse tunnel work just as well.
 
-> Some MCP connector UIs have no header field. If so, pass the token in the URL: `https://health.yourdomain.com/mcp?token=<token>`.
+**Option B — cloud custom connector (needs a public URL from above).**
+Settings → **Connectors** → **Add custom connector** → paste
+`https://<your-public-host>/mcp?token=<token>` → **Add**.
+*(Available on Free/Pro/Max/Team/Enterprise; Free is limited to one custom connector.)*
+</details>
+
+<details>
+<summary><b>ChatGPT app</b> (needs a public URL)</summary>
+
+1. Settings → **Connectors** → **Advanced** → toggle **Developer mode** on.
+2. **Connectors** → **Add custom connector**.
+3. Paste your public URL: `https://<your-public-host>/mcp?token=<token>`
+4. **Create** → it appears in the ➕ / tools menu of a chat.
+
+> Developer mode with full tools is on **Business/Enterprise/Edu**; **Plus/Pro** get read-only custom connectors. Your server must be HTTPS and public.
+</details>
+
+<details>
+<summary><b>Cursor</b> (local — no tunnel)</summary>
+
+`.cursor/mcp.json` in your project (or global settings):
+```json
+{
+  "mcpServers": {
+    "openvitals": {
+      "url": "http://127.0.0.1:42815/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Windsurf · Cline · other MCP clients</b></summary>
+
+Any client that speaks **Streamable HTTP** works. Point it at:
+- **URL:** `http://127.0.0.1:42815/mcp` (local) or your public HTTPS URL (cloud)
+- **Auth:** `Authorization: Bearer <token>` header, or append `?token=<token>` to the URL
+
+For stdio-only clients, wrap it with `npx -y mcp-remote <url> --header "Authorization: Bearer <token>"`.
+</details>
+
+Then just ask: *"summarize my sleep this week"*, *"what's my resting heart rate trend?"*, *"log a 5 km run"*, *"am I hitting my protein target?"*
 
 ---
 
-## Configuration (env vars)
+## 🛠 Tools (~60)
 
-| Variable | Default | What it does |
+| Group | Examples |
+|---|---|
+| **Google Health** | `get_heart` · `get_sleep` · `get_activity` · `get_glucose` · `get_spo2` · `get_temperature` · `get_breathing` · `get_body_composition` · `sync_google_health` |
+| **Summaries** | `get_daily_summary` · `get_weekly_summary` · `get_progress` · `get_recommendation` · `compare_plan_vs_logged` |
+| **Nutrition** | `log_meal` · `search_food` · `lookup_barcode` · `get_nutrition_intake` · meal recipes |
+| **Workouts** | `log_workout` · `search_exercises` · workout plans |
+| **Body & habits** | `upsert_body_metric` · `list_body_metrics` · habits · reminders · hydration |
+
+---
+
+## ⚙️ Configuration
+
+All optional — sensible defaults are auto-generated on first run.
+
+| Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `42815` | Port the server listens on |
-| `GOOGLE_HEALTH_SECRETS` | `~/.hermes/secrets/google-health-client.json` | Path to your Google OAuth client JSON |
-| `HEALTH_MCP_GH_CREDENTIALS` | `.data/google-health-credentials.json` | Where the stored Google token lives |
+| `GOOGLE_HEALTH_SECRETS` | `~/.hermes/secrets/google-health-client.json` | Your Google OAuth client JSON |
+| `HEALTH_MCP_GH_CREDENTIALS` | `.data/google-health-credentials.json` | Stored Google token |
 | `HEALTH_MCP_DB` | `.data/health-mcp.sqlite` | SQLite database path |
-| `HEALTH_MCP_TOKEN` | auto-generated → `.data/mcp-token.txt` | Bearer token for `/mcp` |
-| `HEALTH_MCP_PASSWORD` | auto-generated | Password for the web UI |
-| `HEALTH_MCP_HEALTH_TTL_MS` | `60000` | How long Google Health responses are cached |
-| `HEALTH_MCP_NO_AUTH` | unset | Set to disable auth (local dev only — never expose this) |
+| `HEALTH_MCP_TOKEN` | auto → `.data/mcp-token.txt` | Bearer token for `/mcp` |
+| `HEALTH_MCP_PASSWORD` | auto-generated | Web-UI password |
+| `HEALTH_MCP_HEALTH_TTL_MS` | `60000` | Google Health response cache TTL |
+| `HEALTH_MCP_NO_AUTH` | unset | Disable auth (**local dev only** — never expose) |
 
-## What you can do (~60 MCP tools)
+---
 
-- **Google Health** — heart, sleep, activity, glucose, SpO₂, temperature, breathing, body composition, ECG, daily/weekly summaries
-- **Nutrition** — log meals, search foods, barcode lookup, recipes, intake vs. plan
-- **Workouts** — log workouts, workout plans, exercise search
-- **Body metrics** — weight and other measurements over time
-- **Habits & reminders** — track habits, get due reminders
-- **Insights** — progress, recommendations, plan-vs-logged comparisons
+## 🔒 Security
 
-## Security notes
+- Everything sensitive is **gitignored** — `.data/` (DB, tokens, password, TLS) is never committed.
+- Google scopes are **read-only**.
+- On a public URL, the bearer token is the only thing guarding your data — keep it secret, prefer a tunnel over opening a router port, and rotate it by deleting `.data/mcp-token.txt` and restarting.
 
-- Everything sensitive stays local and is **gitignored**: `.data/` (your DB, tokens, password, TLS) is never committed.
-- Scopes are **read-only** on the Google side.
-- If you expose a public URL, the bearer token is the only thing guarding your data — keep it secret, and prefer a tunnel over opening a router port.
+## 📄 License
 
-## Disclaimer
+MIT — see [`LICENSE`](LICENSE).
 
-OpenVitals is a personal project, not a medical device. Not affiliated with Google. Don't make medical decisions from it.
+> **Disclaimer:** OpenVitals is a personal project, not a medical device, and is not affiliated with Google. Don't make medical decisions from it.
