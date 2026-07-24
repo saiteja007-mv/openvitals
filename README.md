@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="media/openvitals-banner.png" alt="OpenVitals — self-hosted Google Health data, for your AI" width="100%">
+</p>
+
 # OpenVitals
 
 **Your Google Health data as a self-hosted MCP server** — so any AI client (Claude, or anything that speaks [MCP](https://modelcontextprotocol.io)) can read your heart rate, sleep, workouts, nutrition, body metrics and more, and reason over them for you.
