@@ -100,6 +100,7 @@ function extractHealthMetrics(cached, date) {
   return {
     steps: r1(stepsV),
     caloriesOut: r1(calOut),
+    caloriesIn: r1(M(mt, (r) => r.caloriesIn)),
     restingHr: r1(M(ep.heartTrend && ep.heartTrend['activities-heart'], (r) => r.value && r.value.restingHeartRate)),
     sleepMin: r1(sleepMin),
     sleepEfficiency: r1(M(mt, (r) => r.sleepEfficiency)),
@@ -118,8 +119,12 @@ function extractHealthMetrics(cached, date) {
 
 function daySummary(date, { cached, workouts, meals }) {
   const health = extractHealthMetrics(cached, date)
-  const nutrition = nutritionTotals(meals)
-  const balance = calorieBalance({ calIn: nutrition.calIn, caloriesOut: health.caloriesOut })
+  const logged = nutritionTotals(meals)
+  // Prefer Google Health caloriesIn (where meals are logged in the Google Health app);
+  // fall back to meals logged via this tool. Macros only come from logged meals.
+  const calIn = health.caloriesIn != null ? health.caloriesIn : logged.calIn
+  const nutrition = { ...logged, calIn, caloriesInSource: health.caloriesIn != null ? 'google_health' : 'logged_meals' }
+  const balance = calorieBalance({ calIn, caloriesOut: health.caloriesOut })
   return { date, health, workouts, meals, nutrition, balance }
 }
 

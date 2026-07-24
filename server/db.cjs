@@ -90,8 +90,20 @@ function initDb(file) {
       at TEXT NOT NULL, ml REAL NOT NULL, notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS gh_nutrition_daily (
+      date TEXT PRIMARY KEY,
+      calories REAL, protein REAL, carbs REAL, fat REAL, fiber REAL, sugar REAL, sodium REAL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS gh_food_items (
+      item_key TEXT PRIMARY KEY,
+      date TEXT NOT NULL, eaten_at TEXT, food_name TEXT, meal_type TEXT,
+      calories REAL, protein REAL, carbs REAL, fat REAL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE INDEX IF NOT EXISTS idx_workouts_performed ON workouts(performed_at);
     CREATE INDEX IF NOT EXISTS idx_hydration_at ON hydration(at);
+    CREATE INDEX IF NOT EXISTS idx_gh_food_date ON gh_food_items(date);
     CREATE INDEX IF NOT EXISTS idx_meals_eaten ON meals(eaten_at);
     CREATE INDEX IF NOT EXISTS idx_habits_date ON habits(date);
     CREATE INDEX IF NOT EXISTS idx_body_metrics_date ON body_metrics(date);
@@ -213,6 +225,36 @@ function listMeals(opts) {
   if (limit) rows = rows.slice(0, Number(limit))
   return rows
 }
+
+// ===== Google Health nutrition cache (daily macro totals + individual food items) =====
+const upsertNutritionDailyStmt = () => db.prepare(`
+  INSERT INTO gh_nutrition_daily (date, calories, protein, carbs, fat, fiber, sugar, sodium, updated_at)
+  VALUES (@date, @calories, @protein, @carbs, @fat, @fiber, @sugar, @sodium, datetime('now'))
+  ON CONFLICT(date) DO UPDATE SET calories=@calories, protein=@protein, carbs=@carbs, fat=@fat,
+    fiber=@fiber, sugar=@sugar, sodium=@sodium, updated_at=datetime('now')`)
+const upsertFoodItemStmt = () => db.prepare(`
+  INSERT INTO gh_food_items (item_key, date, eaten_at, food_name, meal_type, calories, protein, carbs, fat, updated_at)
+  VALUES (@item_key, @date, @eaten_at, @food_name, @meal_type, @calories, @protein, @carbs, @fat, datetime('now'))
+  ON CONFLICT(item_key) DO UPDATE SET date=@date, eaten_at=@eaten_at, food_name=@food_name, meal_type=@meal_type,
+    calories=@calories, protein=@protein, carbs=@carbs, fat=@fat, updated_at=datetime('now')`)
+const nn = (v) => (v == null ? null : Number(v))
+
+// Bulk-cache a fetchNutrition() result. Returns counts written.
+function cacheNutrition({ daily = [], items = [] } = {}) {
+  const dStmt = upsertNutritionDailyStmt()
+  const iStmt = upsertFoodItemStmt()
+  db.exec('BEGIN')
+  try {
+    for (const d of daily) dStmt.run({ date: d.date, calories: nn(d.calories), protein: nn(d.protein), carbs: nn(d.carbs), fat: nn(d.fat), fiber: nn(d.fiber), sugar: nn(d.sugar), sodium: nn(d.sodium) })
+    for (const it of items) iStmt.run({ item_key: it.item_key, date: it.date, eaten_at: it.eaten_at || null, food_name: it.food_name || null, meal_type: it.meal_type || null, calories: nn(it.calories), protein: nn(it.protein), carbs: nn(it.carbs), fat: nn(it.fat) })
+    db.exec('COMMIT')
+  } catch (e) { db.exec('ROLLBACK'); throw e }
+  return { daysWritten: daily.length, itemsWritten: items.length }
+}
+const getNutritionDaily = (date) => db.prepare('SELECT * FROM gh_nutrition_daily WHERE date = ?').get(date) || null
+const listNutritionDaily = (range) => list('gh_nutrition_daily', 'date', range || {})
+const listFoodItems = (range) => list('gh_food_items', 'date', range || {}).sort((a, b) => (a.eaten_at || '').localeCompare(b.eaten_at || ''))
+const nutritionCacheStats = () => db.prepare('SELECT COUNT(*) days, MIN(date) first, MAX(date) last FROM gh_nutrition_daily').get()
 
 function duplicateMeals(fromDate, toDate) {
   const rows = db.prepare('SELECT * FROM meals WHERE substr(eaten_at, 1, 10) = ?').all(fromDate)
@@ -387,9 +429,13 @@ function importAll(data) {
       if (!Array.isArray(data[t])) continue
       db.exec(`DELETE FROM ${t}`)
       if (!data[t].length) continue
-      const cols = Object.keys(data[t][0])
+      // Only real columns of this table may be interpolated into the SQL — the import JSON
+      // is untrusted, so unknown keys can't smuggle SQL into the column list.
+      const valid = new Set(db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name))
+      const cols = Object.keys(data[t][0]).filter((c) => valid.has(c))
+      if (!cols.length) continue
       const stmt = db.prepare(`INSERT INTO ${t} (${cols.join(',')}) VALUES (${cols.map((c) => '@' + c).join(',')})`)
-      for (const row of data[t]) stmt.run(row)
+      for (const row of data[t]) stmt.run(Object.fromEntries(cols.map((c) => [c, row[c] ?? null])))
     }
     ensureHabitDefsForData() // back-fill defs for any imported habit that predates this table
     db.exec('COMMIT')
@@ -408,6 +454,11 @@ module.exports = {
   deleteWorkout: (id) => remove('workouts', id),
   createMeal: (m) => insert('meals', m),
   listMeals,
+  cacheNutrition,
+  getNutritionDaily,
+  listNutritionDaily,
+  listFoodItems,
+  nutritionCacheStats,
   updateMeal: (id, p) => update('meals', id, p),
   deleteMeal: (id) => remove('meals', id),
   duplicateMeals,

@@ -62,6 +62,11 @@ async function getHealth() {
   catch { return { stale: true, data: lastGood } }
 }
 async function sync() { return pull(localIsoDate(), { force: true }) }
+// Fetch full nutrition history (per-day macro totals + individual food items) for [from, to).
+async function fetchNutrition(from, to) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.fetchNutritionLog(creds.token.access_token, from, to)
+}
 async function getStatus() {
   const creds = getCreds()
   let configured = false
@@ -69,4 +74,4 @@ async function getStatus() {
   return { source: 'google-health-direct', configured, connected: Boolean(creds.token?.access_token || creds.token?.refresh_token), lastSyncAt: creds.lastSyncAt || null }
 }
 
-module.exports = { getHealth, sync, getStatus, __setGoogleHealthForTest: (m) => { googleHealth = m } }
+module.exports = { getHealth, sync, getStatus, fetchNutrition, __setGoogleHealthForTest: (m) => { googleHealth = m } }

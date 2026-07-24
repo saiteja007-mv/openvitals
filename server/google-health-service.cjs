@@ -620,6 +620,63 @@ function translateGoogleHealth(raw, selectedDate) {
   }
 }
 
+// grams for a nutrient by name from a nutritionLog.nutrients[] array
+function nutrientGrams(nl, names) {
+  const arr = nl.nutrients || []
+  for (const name of names) {
+    const found = arr.find((x) => x.nutrient === name)
+    if (found) return numeric(found.quantity?.grams ?? found.quantity?.gramsSum)
+  }
+  return null
+}
+
+function civilStartToLocalIso(cst) {
+  const date = dateFromCivil(cst)
+  if (!date) return { date: null, eatenAt: null }
+  const t = cst.time || {}
+  const hh = String(t.hours || 0).padStart(2, '0')
+  const mm = String(t.minutes || 0).padStart(2, '0')
+  const ss = String(t.seconds || 0).padStart(2, '0')
+  return { date, eatenAt: `${date}T${hh}:${mm}:${ss}` }
+}
+
+// Full nutrition history for [from, to): per-day macro totals + individual food items.
+async function fetchNutritionLog(accessToken, from, to) {
+  const rollup = await dailyRollup(accessToken, 'nutrition-log', from, to)
+  const daily = rollupPoints(rollup).map((pt) => {
+    const nl = pt.nutritionLog || {}
+    return {
+      date: dateFromCivil(pt.civilStartTime),
+      calories: numeric(nl.energy?.kcalSum),
+      protein: nutrientGrams(nl, ['PROTEIN']),
+      carbs: numeric(nl.totalCarbohydrate?.gramsSum) ?? nutrientGrams(nl, ['CARBOHYDRATES', 'TOTAL_CARBOHYDRATE']),
+      fat: numeric(nl.totalFat?.gramsSum) ?? nutrientGrams(nl, ['TOTAL_FAT', 'FAT']),
+      fiber: nutrientGrams(nl, ['DIETARY_FIBER']),
+      sugar: nutrientGrams(nl, ['SUGAR']),
+      sodium: nutrientGrams(nl, ['SODIUM']),
+    }
+  }).filter((r) => r.date)
+
+  const listed = await listData(accessToken, 'nutrition-log', 'interval', from, to, 'all-sources', 'reconcile')
+  const items = (listed.dataPoints || []).map((pt) => {
+    const nl = pt.nutritionLog || {}
+    const { date, eatenAt } = civilStartToLocalIso(nl.interval?.civilStartTime)
+    return {
+      item_key: pt.dataPointName || pt.name,
+      date,
+      eaten_at: eatenAt,
+      food_name: nl.foodDisplayName || 'Unnamed food',
+      meal_type: nl.mealType || null,
+      calories: numeric(nl.energy?.kcal ?? nl.energy?.kcalSum),
+      protein: nutrientGrams(nl, ['PROTEIN']),
+      carbs: numeric(nl.totalCarbohydrate?.grams) ?? nutrientGrams(nl, ['CARBOHYDRATES', 'TOTAL_CARBOHYDRATE']),
+      fat: numeric(nl.totalFat?.grams) ?? nutrientGrams(nl, ['TOTAL_FAT', 'FAT']),
+    }
+  }).filter((r) => r.date && r.item_key)
+
+  return { daily, items }
+}
+
 module.exports = {
   provider: 'google-health',
   scopes: SCOPES,
@@ -629,5 +686,6 @@ module.exports = {
   refreshAccessToken,
   revokeToken,
   syncData: syncGoogleHealthData,
+  fetchNutritionLog,
   __test: { translateGoogleHealth, dateFromCivil, durationSeconds },
 }

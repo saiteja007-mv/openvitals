@@ -15,6 +15,12 @@ async function sendReminder(reminder, message, fetchImpl = fetch) {
   if (!target) return { status: 'skipped_not_configured', detail: 'No Slack/Telegram credentials configured for this reminder.' }
   try {
     if (reminder.channel === 'slack') {
+      // Only Slack's own incoming-webhook host — stops a saved target from pointing the
+      // server's fetch at an internal URL (SSRF). ponytail: exact host prefix, widen if
+      // Slack ever adds another webhook host.
+      if (!/^https:\/\/hooks\.slack\.com\//.test(String(target))) {
+        return { status: 'failed', detail: 'Slack target must be an https://hooks.slack.com/ webhook URL' }
+      }
       const r = await fetchImpl(target, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: message }) })
       return r.ok ? { status: 'sent', detail: null } : { status: 'failed', detail: `Slack webhook responded ${r.status}` }
     }

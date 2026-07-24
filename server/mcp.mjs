@@ -5,6 +5,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
+import crypto from 'node:crypto'
+
+// Constant-time token compare — same approach as auth.cjs, so a network timing side channel
+// can't leak the bearer token byte by byte.
+function tokenEqual(a, b) {
+  const ab = Buffer.from(String(a ?? ''))
+  const bb = Buffer.from(String(b ?? ''))
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb)
+}
 
 const isoDay = (d) => d.toISOString().slice(0, 10)
 // LOCAL "today" (not UTC) so evening calls don't roll to tomorrow's empty day.
@@ -15,6 +24,9 @@ const today = () => { const n = new Date(); return `${n.getFullYear()}-${p2(n.ge
 const localNow = () => { const n = new Date(); return `${today()}T${p2(n.getHours())}:${p2(n.getMinutes())}:${p2(n.getSeconds())}` }
 const shift = (dateStr, n) => { const d = new Date(dateStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return isoDay(d) }
 const nextDay = (dateStr) => shift(dateStr, 1)
+const r0 = (v) => (v == null ? null : Math.round(v))
+const r1 = (v) => (v == null ? null : Math.round(v * 10) / 10)
+const fmtFood = (i) => ({ time: i.eaten_at ? i.eaten_at.slice(11, 16) : null, meal: i.meal_type, food: i.food_name, calories: r0(i.calories), protein_g: r1(i.protein), carbs_g: r1(i.carbs), fat_g: r1(i.fat) })
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj ?? null, null, 2) }] })
 const fail = (e) => ({ content: [{ type: 'text', text: 'Error: ' + (e?.message || e) }], isError: true })
 const wrap = (fn) => async (args) => { try { return ok(await fn(args || {})) } catch (e) { return fail(e) } }
@@ -43,7 +55,50 @@ function buildServer(d) {
     async () => ({ sleep: await ep('sleep'), trend: await ep('sleepTrend'), goal: await ep('sleepGoal') }))
   T('get_hydration', 'Google Health water intake + water goal (use list_hydration for your own logged water).', {},
     async () => ({ water: await ep('water'), goal: await ep('waterGoal') }))
-  T('get_nutrition_intake', 'Google Health nutrition/food intake (calories in).', {}, () => ep('food'))
+  T('get_nutrition_intake', 'Calories + full macros (protein/carbs/fat/fiber) AND the list of foods you ate on a date, from your Google Health food log (cached by sync_nutrition_cache). Falls back to live Google Health calories, then meals logged via this tool. Defaults to today.',
+    { date: z.string().optional() },
+    async ({ date }) => {
+      const dt = date || today()
+      const foods = db.listFoodItems({ from: dt, to: nextDay(dt) }).map(fmtFood)
+      const cached = db.getNutritionDaily(dt)
+      if (cached) {
+        return {
+          date: dt, source: 'google_health',
+          calories: r0(cached.calories), protein_g: r1(cached.protein), carbs_g: r1(cached.carbs),
+          fat_g: r1(cached.fat), fiber_g: r1(cached.fiber), sugar_g: r1(cached.sugar), sodium_g: r1(cached.sodium),
+          foods, cachedAt: cached.updated_at,
+        }
+      }
+      // Not cached — fall back to live metricTrends (calories only), then locally-logged meals.
+      const live = (await health())?.endpoints?.metricTrends?.values?.find((r) => r.dateTime === dt)
+      const gCal = live && live.caloriesIn != null ? Math.round(live.caloriesIn) : null
+      const meals = db.listMeals({ from: dt, to: nextDay(dt) })
+      const logged = summary.nutritionTotals(meals)
+      return {
+        date: dt,
+        source: gCal != null ? 'google_health_live' : (meals.length ? 'logged_meals' : 'no_data'),
+        calories: gCal != null ? gCal : (meals.length ? logged.calIn : null),
+        protein_g: meals.length ? logged.protein : null, carbs_g: meals.length ? logged.carbs : null, fat_g: meals.length ? logged.fat : null,
+        foods,
+        note: 'This date is not in the nutrition cache (macros + foods). Run sync_nutrition_cache to backfill it.',
+      }
+    })
+  T('get_food_log', 'The individual foods/items you logged on a date (name, meal type, time, calories, macros) from Google Health. Defaults to today.',
+    { date: z.string().optional() },
+    ({ date }) => {
+      const dt = date || today()
+      const foods = db.listFoodItems({ from: dt, to: nextDay(dt) }).map(fmtFood)
+      return { date: dt, count: foods.length, foods }
+    })
+  T('sync_nutrition_cache', 'Fetch nutrition (daily macro totals + individual food items) from Google Health for a date range and cache it locally. Defaults to the last 14 days; pass a wider range to backfill. from/to are YYYY-MM-DD (to is exclusive).',
+    { from: z.string().optional(), to: z.string().optional() },
+    async ({ from, to }) => {
+      const toDate = to || nextDay(today())
+      const fromDate = from || shift(today(), -14)
+      const { daily, items } = await googleHealth.fetchNutrition(fromDate, toDate)
+      const counts = db.cacheNutrition({ daily, items })
+      return { range: { from: fromDate, to: toDate }, ...counts, cache: db.nutritionCacheStats() }
+    })
   T('get_body_composition', 'Google Health body weight, body fat, and weight goal.', {},
     async () => ({ weight: await ep('bodyWeight'), bodyFat: await ep('bodyFat'), goal: await ep('weightGoal') }))
   T('get_glucose', 'Blood glucose readings.', {}, () => ep('bloodGlucose'))
@@ -56,7 +111,16 @@ function buildServer(d) {
   // ===== Summaries / recommendation / export =====
   T('get_daily_summary', 'Full day summary: health, workouts, meals, nutrition, calorie balance.',
     { date: z.string().describe('YYYY-MM-DD; default today').optional() },
-    async ({ date }) => { const dt = date || today(); return summary.daySummary(dt, { cached: await health(), workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }) }) })
+    async ({ date }) => {
+      const dt = date || today()
+      const s = summary.daySummary(dt, { cached: await health(), workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }) })
+      const gh = db.getNutritionDaily(dt)
+      if (gh) {
+        s.nutrition = { calIn: r0(gh.calories), protein: r1(gh.protein), carbs: r1(gh.carbs), fat: r1(gh.fat), fiber: r1(gh.fiber), caloriesInSource: 'google_health', foods: db.listFoodItems({ from: dt, to: nextDay(dt) }).map(fmtFood) }
+        s.balance = summary.calorieBalance({ calIn: gh.calories, caloriesOut: s.health.caloriesOut })
+      }
+      return s
+    })
   T('get_weekly_summary', 'Rolling multi-day summary (averages, insights, best/worst day).',
     { days: z.number().int().min(1).max(31).optional() },
     async ({ days }) => { const n = days || 7, to = today(), from = shift(to, -(n - 1)), cached = await health(), settings = db.getSettings(), arr = []; for (let dt = from; dt <= to; dt = nextDay(dt)) arr.push(summary.daySummary(dt, { cached, workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }) })); return { from, to, ...weekly.weeklySummary(arr, settings) } })
@@ -174,8 +238,12 @@ export function createMcpHandler(deps) {
   const token = deps.token
   return async function handleMcp(req, res, bodyRaw) {
     const authz = req.headers['authorization'] || ''
-    const provided = authz.startsWith('Bearer ') ? authz.slice(7) : (req.headers['x-api-key'] || '')
-    if (!token || provided !== token) {
+    // Accept the token via Authorization/x-api-key header, OR ?token= in the URL.
+    // The URL fallback is for chat-app connector dialogs that only offer OAuth/no-auth
+    // and have no header field (e.g. claude.ai "Add custom connector").
+    const urlToken = new URL(req.url, 'http://127.0.0.1').searchParams.get('token') || ''
+    const provided = authz.startsWith('Bearer ') ? authz.slice(7) : (req.headers['x-api-key'] || urlToken)
+    if (!token || !tokenEqual(provided, token)) {
       res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer realm="health-mcp"' })
       return res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized: valid bearer token required' }, id: null }))
     }
