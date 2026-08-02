@@ -233,7 +233,8 @@ function createServer({ dbFile, exercisesJson, distDir }) {
         for (let d = from; d <= to; d = shiftDate(d, 1)) {
           const workouts = db.listWorkouts({ from: d, to: shiftDate(d, 1) })
           const meals = db.listMeals({ from: d, to: shiftDate(d, 1) })
-          days.push(summary.daySummary(d, { cached: health.data, workouts, meals }))
+          const ghNutrition = db.getNutritionDaily(d)
+          days.push(summary.daySummary(d, { cached: health.data, workouts, meals, ghNutrition }))
         }
         return sendJson(res, 200, { from, to, ...weekly.weeklySummary(days, settings) })
       }
@@ -285,7 +286,8 @@ function createServer({ dbFile, exercisesJson, distDir }) {
         const health = await googleHealth.getHealth()
         const workouts = db.listWorkouts({ from: date, to })
         const meals = db.listMeals({ from: date, to })
-        return sendJson(res, 200, summary.daySummary(date, { cached: health.data, workouts, meals }))
+        const ghNutrition = db.getNutritionDaily(date)
+        return sendJson(res, 200, summary.daySummary(date, { cached: health.data, workouts, meals, ghNutrition }))
       }
 
       if (p.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' })

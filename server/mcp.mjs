@@ -113,7 +113,7 @@ function buildServer(d) {
     { date: z.string().describe('YYYY-MM-DD; default today').optional() },
     async ({ date }) => {
       const dt = date || today()
-      const s = summary.daySummary(dt, { cached: await health(), workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }) })
+      const s = summary.daySummary(dt, { cached: await health(), workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }), ghNutrition: db.getNutritionDaily(dt) })
       const gh = db.getNutritionDaily(dt)
       if (gh) {
         s.nutrition = { calIn: r0(gh.calories), protein: r1(gh.protein), carbs: r1(gh.carbs), fat: r1(gh.fat), fiber: r1(gh.fiber), caloriesInSource: 'google_health', foods: db.listFoodItems({ from: dt, to: nextDay(dt) }).map(fmtFood) }
@@ -123,7 +123,7 @@ function buildServer(d) {
     })
   T('get_weekly_summary', 'Rolling multi-day summary (averages, insights, best/worst day).',
     { days: z.number().int().min(1).max(31).optional() },
-    async ({ days }) => { const n = days || 7, to = today(), from = shift(to, -(n - 1)), cached = await health(), settings = db.getSettings(), arr = []; for (let dt = from; dt <= to; dt = nextDay(dt)) arr.push(summary.daySummary(dt, { cached, workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }) })); return { from, to, ...weekly.weeklySummary(arr, settings) } })
+    async ({ days }) => { const n = days || 7, to = today(), from = shift(to, -(n - 1)), cached = await health(), settings = db.getSettings(), arr = []; for (let dt = from; dt <= to; dt = nextDay(dt)) arr.push(summary.daySummary(dt, { cached, workouts: db.listWorkouts({ from: dt, to: nextDay(dt) }), meals: db.listMeals({ from: dt, to: nextDay(dt) }), ghNutrition: db.getNutritionDaily(dt) })); return { from, to, ...weekly.weeklySummary(arr, settings) } })
   T('get_recommendation', 'Weight-trajectory recommendation from recent intake/output vs goal.', {}, async () => {
     const settings = db.getSettings(), cached = await health(), t = today()
     const byDate = {}; for (const r of (cached?.endpoints?.bodyWeight?.weight) || []) { const dd = r.dateTime || r.date; if (dd && r.weight != null) byDate[dd] = r.weight }

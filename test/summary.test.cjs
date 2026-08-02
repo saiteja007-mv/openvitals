@@ -92,3 +92,33 @@ test('extractHealthMetrics never mixes in another day when the requested day (in
   assert.equal(pastDay.restingHr, 58)
   assert.equal(pastDay.asOf, '2026-07-02')
 })
+
+// Regression: macros and Fitbit sessions used to read 0 because daySummary only looked at the
+// local meals/workouts tables, while food and exercise are both logged in the Google Health app.
+test('daySummary: macros come from the Google Health nutrition cache, not just logged meals', () => {
+  const ghNutrition = { date: '2026-08-01', calories: 2652, protein: 210.1, carbs: 349.3, fat: 49.5 }
+  const d = s.daySummary('2026-08-01', { cached: {}, workouts: [], meals: [], ghNutrition })
+  assert.equal(d.nutrition.protein, 210.1)
+  assert.equal(d.nutrition.calIn, 2652)
+  assert.equal(d.nutrition.caloriesInSource, 'google_health_cache')
+})
+
+test('daySummary: falls back to logged meals when the nutrition cache has no row', () => {
+  const meals = [{ calories: 500, protein_g: 40, carbs_g: 50, fat_g: 10 }]
+  const d = s.daySummary('2026-08-01', { cached: {}, workouts: [], meals, ghNutrition: null })
+  assert.equal(d.nutrition.protein, 40)
+  assert.equal(d.nutrition.caloriesInSource, 'logged_meals')
+})
+
+test('daySummary: counts Fitbit activities as workouts for the requested date only', () => {
+  const cached = { endpoints: { activities: { activities: [
+    { activityName: 'Cricket', startTime: '2026-07-29T22:06:00', duration: 1024000, calories: 143, averageHeartRate: 133 },
+    { activityName: 'Walk', startTime: '2026-07-28T14:36:00', duration: 913000, calories: 103 },
+  ] } } }
+  const d = s.daySummary('2026-07-29', { cached, workouts: [], meals: [] })
+  assert.equal(d.workouts.length, 1)
+  assert.equal(d.workouts[0].name, 'Cricket')
+  assert.equal(d.workouts[0].duration_min, 17)
+  assert.equal(d.workouts[0].avg_hr, 133)
+  assert.equal(d.workouts[0].source, 'google_health')
+})

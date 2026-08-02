@@ -44,7 +44,7 @@ test('weeklySummary: insight strings for protein target + sleep below 6h', () =>
     day('2026-06-26', { calIn: 2000, protein: 100, sleepMin: 420 }), // above 6h, protein missed
   ]
   const s = weeklySummary(days, { protein_goal: 150 })
-  assert.ok(s.insights.includes('Protein target hit 1/2 days'))
+  assert.ok(s.insights.includes('Protein target hit 1/2 logged days'))
   assert.ok(s.insights.includes('1/2 days with sleep below 6h'))
 })
 
@@ -79,4 +79,21 @@ test('weeklySummary: identical days rank as neither best nor worst', () => {
   const s = weeklySummary(days, { calorie_goal: 2200, protein_goal: 120, steps_goal: 10000 })
   assert.equal(s.bestDay, null, 'a genuine tie must not name a best day')
   assert.equal(s.worstDay, null, 'a genuine tie must not name a worst day')
+})
+
+// Regression: unlogged days used to be averaged in as 0, so 5 logged days at ~2490 kcal
+// reported as 1778.6. Absence of data is not a zero-calorie day.
+test('weeklySummary: averages nutrition over logged days only, and says how many were unlogged', () => {
+  const days = [
+    day('2026-07-27', { calIn: 0, protein: 0, steps: 5000 }),
+    day('2026-07-28', { calIn: 0, protein: 0, steps: 5000 }),
+    day('2026-07-29', { calIn: 2520, protein: 200, steps: 5000 }),
+    day('2026-07-30', { calIn: 2460, protein: 190, steps: 5000 }),
+  ]
+  const s = weeklySummary(days, { protein_goal: 150 })
+  assert.equal(s.nutritionDays, 2)
+  assert.equal(s.avgCalories, 2490)
+  assert.equal(s.avgProtein, 195)
+  assert.ok(s.insights.includes('Protein target hit 2/2 logged days'))
+  assert.ok(s.insights.includes('2/4 days had no food logged'))
 })

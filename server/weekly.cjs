@@ -22,8 +22,14 @@ function weeklySummary(daySummaries, goals) {
   const withHealth = (pick) => daySummaries.filter((d) => pick(d.health) != null)
   const avg = (nums) => (nums.length ? nums.reduce((a, v) => a + v, 0) / nums.length : null)
 
-  const avgCalories = round1(avg(daySummaries.map((d) => d.nutrition.calIn)))
-  const avgProtein = round1(avg(daySummaries.map((d) => d.nutrition.protein)))
+  // A day with nothing logged is absence of data, not a 0-calorie day. goalScore already refuses
+  // to score those; averaging them in dragged avgCalories/avgProtein down by the number of
+  // unlogged days (5 logged days out of 7 read as 2490 kcal -> 1778.6). Average over logged days
+  // and report how many there were, so the denominator is never silently wrong.
+  const loggedDays = daySummaries.filter((d) => d.nutrition && d.nutrition.calIn > 0)
+  const avgCalories = round1(avg(loggedDays.map((d) => d.nutrition.calIn)))
+  const avgProtein = round1(avg(loggedDays.map((d) => d.nutrition.protein)))
+  const nutritionDays = loggedDays.length
   const workoutCount = daySummaries.reduce((a, d) => a + d.workouts.length, 0)
 
   const stepsDays = withHealth((h) => h.steps)
@@ -51,10 +57,11 @@ function weeklySummary(daySummaries, goals) {
   }
 
   const insights = []
-  if (goals?.protein_goal) {
-    const hit = daySummaries.filter((d) => d.nutrition.protein >= goals.protein_goal).length
-    insights.push(`Protein target hit ${hit}/${n} days`)
+  if (goals?.protein_goal && nutritionDays) {
+    const hit = loggedDays.filter((d) => d.nutrition.protein >= goals.protein_goal).length
+    insights.push(`Protein target hit ${hit}/${nutritionDays} logged days`)
   }
+  if (nutritionDays < n) insights.push(`${n - nutritionDays}/${n} days had no food logged`)
   if (sleepDays.length) {
     const below6 = sleepDays.filter((d) => d.health.sleepMin < 360).length
     insights.push(`${below6}/${sleepDays.length} days with sleep below 6h`)
@@ -64,7 +71,7 @@ function weeklySummary(daySummaries, goals) {
     insights.push(`Steps target hit ${hit}/${n} days`)
   }
 
-  return { days: n, avgCalories, avgProtein, workoutCount, avgSteps, avgSleepMin, weightChange, bestDay, worstDay, insights }
+  return { days: n, nutritionDays, avgCalories, avgProtein, workoutCount, avgSteps, avgSleepMin, weightChange, bestDay, worstDay, insights }
 }
 
 module.exports = { weeklySummary }

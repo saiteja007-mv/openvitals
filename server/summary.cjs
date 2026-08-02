@@ -117,15 +117,39 @@ function extractHealthMetrics(cached, date) {
   }
 }
 
-function daySummary(date, { cached, workouts, meals }) {
-  const health = extractHealthMetrics(cached, date)
-  const logged = nutritionTotals(meals)
-  // Prefer Google Health caloriesIn (where meals are logged in the Google Health app);
-  // fall back to meals logged via this tool. Macros only come from logged meals.
-  const calIn = health.caloriesIn != null ? health.caloriesIn : logged.calIn
-  const nutrition = { ...logged, calIn, caloriesInSource: health.caloriesIn != null ? 'google_health' : 'logged_meals' }
-  const balance = calorieBalance({ calIn, caloriesOut: health.caloriesOut })
-  return { date, health, workouts, meals, nutrition, balance }
+// Fitbit-recorded sessions live in the Google Health payload, not the local workouts table.
+// Food is logged in the Google Health app too, so listWorkouts/listMeals are usually empty and
+// every macro read as 0 while the real numbers sat in the nutrition cache.
+function ghActivitiesOn(cached, date) {
+  const all = (cached && cached.endpoints && cached.endpoints.activities && cached.endpoints.activities.activities) || []
+  if (!date) return all
+  return all.filter((a) => String(a.startTime || '').slice(0, 10) === date)
 }
 
-module.exports = { extractHealthMetrics, nutritionTotals, calorieBalance, daySummary, latest, latestSleep }
+function daySummary(date, { cached, workouts, meals, ghNutrition }) {
+  const health = extractHealthMetrics(cached, date)
+  const logged = nutritionTotals(meals)
+  // Prefer the Google Health nutrition cache (the app is where meals actually get logged) for
+  // BOTH calories and macros; fall back to health.caloriesIn, then to meals logged via this tool.
+  const gh = ghNutrition || null
+  const macros = gh
+    ? { calIn: num(gh.calories), protein: num(gh.protein), carbs: num(gh.carbs), fat: num(gh.fat) }
+    : logged
+  const calIn = macros.calIn || (health.caloriesIn != null ? health.caloriesIn : logged.calIn)
+  const caloriesInSource = gh ? 'google_health_cache' : health.caloriesIn != null ? 'google_health' : 'logged_meals'
+  const nutrition = { ...macros, calIn, caloriesInSource }
+  const balance = calorieBalance({ calIn, caloriesOut: health.caloriesOut })
+  // Count Fitbit sessions alongside anything logged manually, so workoutCount isn't a flat 0.
+  const ghWorkouts = ghActivitiesOn(cached, date).map((a) => ({
+    source: 'google_health',
+    name: a.activityName || 'Activity',
+    started_at: a.startTime,
+    duration_min: a.duration != null ? Math.round(a.duration / 60000) : null,
+    calories: a.calories != null ? Math.round(num(a.calories)) : null,
+    avg_hr: a.averageHeartRate ?? null,
+  }))
+  const allWorkouts = [...workouts, ...ghWorkouts]
+  return { date, health, workouts: allWorkouts, meals, nutrition, balance }
+}
+
+module.exports = { extractHealthMetrics, nutritionTotals, calorieBalance, daySummary, ghActivitiesOn, latest, latestSleep }
