@@ -165,6 +165,12 @@ async function writeWeight(params) {
   const creds = await validToken(getCreds(), loadConfig())
   return googleHealth.createWeight(creds.token.access_token, params)
 }
+
+// Exercise session. Sets/reps ride in `notes` — v4 has no field for them (see createExercise).
+async function writeExercise(params) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.createExercise(creds.token.access_token, params)
+}
 async function deleteGoogleHealthEntry(name) {
   const creds = await validToken(getCreds(), loadConfig())
   return googleHealth.deleteDataPoint(creds.token.access_token, name)
@@ -179,7 +185,7 @@ async function getStatus() {
 module.exports = {
   getHealth, sync, getStatus, fetchNutrition, backfill,
   fetchExerciseSessions, fetchExerciseSession, exportExerciseTcx, queryDataPoints,
-  writeMeal, writeHydration, writeWeight, deleteGoogleHealthEntry,
+  writeMeal, writeHydration, writeWeight, writeExercise, deleteGoogleHealthEntry,
   DATA_TYPES: googleHealth.DATA_TYPES,
   cacheStats: () => db().healthCacheStats(),
   cachedDates: (range) => db().listCachedHealthDates(range),

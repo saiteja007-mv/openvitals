@@ -328,6 +328,39 @@ export function buildServer(d) {
       const { name } = await googleHealth.writeWeight({ physicalTime: t, weightGrams: Math.round(weight_kg * 1000), notes })
       return { name, logged: { at: t, weight_kg, notes: notes ?? null } }
     })
+  T('log_workout_to_google_health', 'Log a strength/gym workout to your REAL Google Health / Fitbit account AND to this server\'s local workouts table in one call. IMPORTANT: Google Health has no fields for sets, reps, weights or exercise names — none exist in the API — so the exercise list is rendered into the session\'s free-text notes (e.g. "Bench press 3x8 @40kg"), which is the only place the app will show it. The structured sets are stored locally, which is what get_progress uses for 1RM tracking. The session TITLE in the app comes from exercise_type and cannot be set by name (STRENGTH_TRAINING shows as "Strength training"). Google does not deduplicate: calling this twice logs two sessions. Undo the Google side with delete_google_health_entry({ name }).',
+    {
+      start: z.string().describe('ISO datetime the workout started'),
+      end: z.string().describe('ISO datetime it ended').optional(),
+      duration_min: z.number().describe('used to derive `end` when end is omitted').optional(),
+      exercise_type: z.string().describe('Google exerciseType, e.g. STRENGTH_TRAINING (default), WEIGHTLIFTING, FREE_WEIGHTS, CIRCUIT_TRAINING, CORE_TRAINING, CALISTHENICS, CROSSFIT, PILATES, WORKOUT').optional(),
+      exercises: z.array(z.object({
+        name: z.string(), sets: z.number().optional(), reps: z.number().optional(),
+        weight_kg: z.number().optional(), duration_min: z.number().optional(), exercise_id: z.string().optional(), notes: z.string().optional(),
+      })).describe('the actual lifts; each is also written to the local workouts table'),
+      notes: z.string().describe('free-text appended after the exercise lines').optional(),
+      calories_kcal: z.number().optional(),
+      avg_hr_bpm: z.number().optional(),
+      also_log_locally: z.boolean().describe('default true; set false to write only to Google').optional(),
+    },
+    async ({ start, end, duration_min, exercise_type, exercises, notes, calories_kcal, avg_hr_bpm, also_log_locally }) => {
+      const endTime = end || (duration_min != null ? new Date(new Date(start).getTime() + duration_min * 60_000).toISOString() : undefined)
+      const { name } = await googleHealth.writeExercise({
+        startTime: start, endTime, exerciseType: exercise_type || 'STRENGTH_TRAINING',
+        exercises, notes, caloriesKcal: calories_kcal, avgHeartRateBpm: avg_hr_bpm,
+        activeDurationS: duration_min != null ? duration_min * 60 : undefined,
+      })
+      // Local rows carry session_id so list_exercise_sessions/get_workout_day show the sets
+      // under the very session we just created in Google.
+      const logged = (also_log_locally === false ? [] : exercises).map((e) => db.createWorkout({
+        name: e.name, exercise_id: e.exercise_id ?? null, sets: e.sets ?? null, reps: e.reps ?? null,
+        weight_kg: e.weight_kg ?? null, duration_min: e.duration_min ?? null, notes: e.notes ?? null,
+        performed_at: start, session_id: name,
+      }))
+      return { name, exercise_type: exercise_type || 'STRENGTH_TRAINING', exercises_logged_locally: logged.length,
+        note: 'Sets/reps appear in the Google Health app inside the session notes — the API has no structured field for them.' }
+    })
+
   T('delete_google_health_entry', 'Delete an entry previously written by log_meal_to_google_health / log_water_to_google_health / log_weight_to_google_health. `name` is the value that call returned.',
     { name: z.string() }, ({ name }) => googleHealth.deleteGoogleHealthEntry(name))
 

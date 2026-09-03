@@ -2,6 +2,28 @@
 
 All notable changes to OpenVitals (health-mcp). Dates are the day the work landed on `main`.
 
+## [0.4.0] — 2026-09-03
+
+### Added
+- **Workout writing.** `log_workout_to_google_health` creates a real exercise session in the Google Health /
+  Fitbit app and stores the structured sets locally in one call, linked by `session_id`. New scope
+  `googlehealth.activity_and_fitness.writeonly`.
+- **Deeper workout reads.** Sessions now surface running form (`form`: cadence, stride length, vertical
+  oscillation, vertical ratio, ground-contact time), `run_vo2_max`, `swim_lengths` and `pool_length_m`, all
+  of which the watch records and the server previously dropped. Laps/splits are normalised to the same
+  units as the session (metres, seconds) instead of being returned as raw millimetre integers and `"960s"`
+  strings.
+
+### Known API limits (verified live, not assumptions)
+- **Google Health v4 has no sets, reps, weights or exercise names.** `repetition` appears zero times in the
+  discovery doc; the only `segment` fields belong to Sleep; v4beta/v5/v4alpha do not exist. Sets are
+  therefore rendered into the session's free-text `notes` — the only field that will carry them — while the
+  structured version stays in the local `workouts` table, which is what `get_progress` computes 1RM from.
+- **A session's title cannot be set.** `displayName` is overwritten server-side from `exerciseType`
+  (`STRENGTH_TRAINING` → "Strength training"). The API docs state that `exerciseType: OTHER` permits a
+  custom free-form name; live, `OTHER` is silently coerced to `WORKOUT` and the supplied name is discarded.
+  Pick the title by choosing the right `exerciseType`.
+
 ## [0.3.1] — 2026-09-03
 
 ### Fixed

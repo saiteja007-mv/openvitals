@@ -23,6 +23,10 @@ const SCOPES = [
   // Any scope change needs a fresh consent: node server/login-gh.cjs
   'https://www.googleapis.com/auth/googlehealth.nutrition.writeonly',
   'https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly',
+  // exercise sessions (2026-09-03). NOTE: v4 Exercise has no sets/reps/weight fields at all —
+  // 'repetition' appears zero times in the discovery doc — so set detail can only ride in the
+  // session's free-text `notes`. Structured sets stay in the local workouts table.
+  'https://www.googleapis.com/auth/googlehealth.activity_and_fitness.writeonly',
 ]
 
 let nextApiRequestAt = 0
@@ -709,6 +713,37 @@ function civilDateFromOffset(isoTime, utcOffset) {
 // Google Health Exercise → Session. Google records NO sets/reps/exercise names: strength
 // sessions are exerciseType WORKOUT with displayName = muscle group. Sets live in the local
 // workouts table, linked by session_id.
+// Running form. Google mixes units here — millimetres for distances, a bare ratio, a duration
+// string — so normalise to m / % / ms and drop the block entirely when the watch recorded none.
+function mobilityForm(m) {
+  if (!m) return null
+  const form = {
+    cadence_spm: numeric(m.avgCadenceStepsPerMinute),
+    stride_length_m: numeric(m.avgStrideLengthMillimeters, (v) => v / 1000),
+    vertical_oscillation_m: numeric(m.avgVerticalOscillationMillimeters, (v) => v / 1000),
+    vertical_ratio_pct: numeric(m.avgVerticalRatio),
+    ground_contact_ms: m.avgGroundContactTimeDuration ? durationSeconds(m.avgGroundContactTimeDuration) * 1000 : null,
+  }
+  return Object.values(form).some((v) => v !== null) ? form : null
+}
+
+// A lap/split carries its own metricsSummary. Returning it raw meant callers got millimetre
+// integers and "960s" strings while the session above it was already normalised.
+function toLap(split) {
+  const m = split.metricsSummary || {}
+  return {
+    start_time: split.startTime ?? null,
+    end_time: split.endTime ?? null,
+    split_type: split.splitType ?? null,
+    active_duration_s: split.activeDuration ? durationSeconds(split.activeDuration) : null,
+    distance_m: numeric(m.distanceMillimeters, (v) => v / 1000),
+    calories_kcal: numeric(m.caloriesKcal),
+    steps: numeric(m.steps),
+    avg_hr_bpm: numeric(m.averageHeartRateBeatsPerMinute),
+    avg_pace_s_per_m: numeric(m.averagePaceSecondsPerMeter),
+  }
+}
+
 function toSession(point) {
   const exercise = point.exercise || {}
   const summary = exercise.metricsSummary || {}
@@ -740,8 +775,14 @@ function toSession(point) {
     // Fitbit emits a terminal PAUSE (no matching RESUME) right before STOP/end-of-events on
     // sessions that were never actually paused — only count pauses that were resumed.
     pauses: events.filter((event, i) => /PAUSE$/.test(event.type) && /RESUME$/.test(events[i + 1]?.type || '')).length,
-    laps: exercise.splitSummaries || [],
-    splits: exercise.splits || [],
+    // Running-form telemetry the watch records but nothing surfaced until now. Present on
+    // walks/runs only; every sub-field is optional even when mobilityMetrics itself exists.
+    form: mobilityForm(summary.mobilityMetrics),
+    run_vo2_max: numeric(summary.runVo2Max),
+    swim_lengths: numeric(summary.totalSwimLengths),
+    pool_length_m: numeric(exercise.exerciseMetadata?.poolLengthMillimeters, (value) => value / 1000),
+    laps: (exercise.splitSummaries || []).map(toLap),
+    splits: (exercise.splits || []).map(toLap),
     notes: exercise.notes ?? null,
     has_gps: exercise.exerciseMetadata?.hasGps === true,
     source: source ? { platform: source.platform ?? null, recording_method: source.recordingMethod ?? null } : null,
@@ -958,12 +999,57 @@ async function createWeight(accessToken, { physicalTime, weightGrams, notes } = 
   return unwrapOperation(op)
 }
 
+// Exercise-session create (2026-09-03). Verified live against the v4 API:
+//   - `notes` is free text and round-trips exactly, multi-line included. It is the ONLY field
+//     that can carry sets/reps/exercise names — v4 has no repetition/set/weight fields anywhere
+//     ("repetition" appears zero times in the discovery doc).
+//   - `displayName` is NOT settable. The server overwrites it with a name generated from
+//     exerciseType ("Strength training" for STRENGTH_TRAINING). The docs claim exerciseType
+//     `OTHER` allows a custom name; live, OTHER is coerced to WORKOUT and the name is discarded.
+//     So the session title is chosen by picking the right exerciseType, never by naming it.
+//   - metricsSummary (caloriesKcal, averageHeartRateBeatsPerMinute) and activeDuration persist.
+const SET_LINE = (e) => {
+  const reps = e.sets && e.reps ? `${e.sets}x${e.reps}` : (e.reps ? `${e.reps} reps` : (e.sets ? `${e.sets} sets` : null))
+  const load = e.weight_kg != null ? `@${e.weight_kg}kg` : null
+  const time = e.duration_min != null ? `${e.duration_min} min` : null
+  return [e.name, reps, load, time].filter(Boolean).join(' ')
+}
+
+// Sets are rendered to text because that is the only shape Google will store. The structured
+// version stays in the local workouts table, which is what get_progress computes 1RM from.
+function renderSets(exercises = [], extraNotes) {
+  const lines = exercises.map(SET_LINE).filter(Boolean)
+  if (extraNotes) lines.push(extraNotes)
+  return lines.join('\n') || null
+}
+
+async function createExercise(accessToken, {
+  startTime, endTime, exerciseType = 'STRENGTH_TRAINING', exercises, notes,
+  caloriesKcal, avgHeartRateBpm, activeDurationS,
+} = {}) {
+  const interval = sessionInterval(startTime, endTime)
+  const metricsSummary = {}
+  if (caloriesKcal != null) metricsSummary.caloriesKcal = caloriesKcal
+  if (avgHeartRateBpm != null) metricsSummary.averageHeartRateBeatsPerMinute = String(Math.round(avgHeartRateBpm))
+  const body = {
+    exercise: {
+      interval,
+      exerciseType,
+      ...(activeDurationS != null ? { activeDuration: `${Math.round(activeDurationS)}s` } : {}),
+      ...(Object.keys(metricsSummary).length ? { metricsSummary } : {}),
+      ...(renderSets(exercises, notes) ? { notes: renderSets(exercises, notes) } : {}),
+    },
+  }
+  const op = await request('/users/me/dataTypes/exercise/dataPoints', accessToken, { method: 'POST', body })
+  return unwrapOperation(op)
+}
+
 // Undo for any of the three write types — one function, the type comes out of `name` itself
 // (the segment after dataTypes/ and before /dataPoints/). Allowlisted to the types this write
 // surface actually creates — health_metrics_and_measurements.writeonly likely covers the whole
 // sample/reconcile family (heart-rate, weight, body-fat, ...), so without this a `name` copied
 // from a read tool (e.g. get_heart) could batchDelete real device-synced data this tool never wrote.
-const DELETABLE_TYPES = ['nutrition-log', 'hydration-log', 'weight']
+const DELETABLE_TYPES = ['nutrition-log', 'hydration-log', 'weight', 'exercise']
 async function deleteDataPoint(accessToken, name) {
   const match = /dataTypes\/([^/]+)\/dataPoints\//.exec(name || '')
   if (!match) throw new Error(`Cannot parse a Google Health data type out of "${name}".`)
@@ -993,6 +1079,7 @@ module.exports = {
   createNutritionLog,
   createHydrationLog,
   createWeight,
+  createExercise,
   deleteDataPoint,
   __test: { translateGoogleHealth, dateFromCivil, durationSeconds, dataFilter, toSession },
 }
