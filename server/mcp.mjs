@@ -346,7 +346,7 @@ export function buildServer(d) {
 
   // ===== Meals & nutrition =====
   T('list_meals', 'Logged meals in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listMeals({ from, to }))
-  T('log_meal', 'Log a meal with nutrition macros.',
+  T('log_meal', 'Log a meal to this server\'s LOCAL database only — it will NOT appear in the Google Health / Fitbit app. If the user wants the meal in their actual health app (usually what "log my meal" means), use log_meal_to_google_health instead.',
     { name: z.string(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(), eaten_at: z.string().optional() },
     (a) => db.createMeal({ ...a, eaten_at: a.eaten_at || localNow() }))
   T('update_meal', 'Update a logged meal by id.',
@@ -368,7 +368,7 @@ export function buildServer(d) {
   T('delete_meal_recipe', 'Delete a meal template by id.', { id: z.number() }, ({ id }) => db.deleteMealRecipe(id))
 
   // ===== Hydration (local hydration log; Google Health water is read-only) =====
-  T('log_hydration', 'Log water intake in milliliters.',
+  T('log_hydration', 'Log water to this server\'s LOCAL database only — it will NOT appear in the Google Health / Fitbit app. If the user wants the water in their actual health app (usually what "log my water" means), use log_water_to_google_health instead.',
     { ml: z.number(), at: z.string().describe('ISO datetime; default now').optional(), notes: z.string().optional() },
     (a) => db.createHydration({ ...a, at: a.at || localNow() }))
   T('list_hydration', 'Your logged water intake in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listHydration({ from, to }))
@@ -376,7 +376,7 @@ export function buildServer(d) {
 
   // ===== Body =====
   T('list_body_metrics', 'Body measurements (weight, body fat, waist, chest, arm) in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listBodyMetrics({ from, to }))
-  T('upsert_body_metric', 'Record/update body measurements for a date.',
+  T('upsert_body_metric', 'Record/update body measurements (weight, body fat, waist, chest, arm) in this server\'s LOCAL database only — NOT written to the Google Health / Fitbit app. For weight the user wants in their actual health app, use log_weight_to_google_health instead. This tool is still the right one for measurements Google Health has no field for (waist/chest/arm).',
     { date: z.string().optional(), weight_kg: z.number().optional(), body_fat_pct: z.number().optional(), waist_cm: z.number().optional(), chest_cm: z.number().optional(), arm_cm: z.number().optional(), notes: z.string().optional() },
     ({ date, ...patch }) => db.upsertBodyMetric(date || today(), patch))
   T('delete_body_metric', 'Delete a body-metric entry by id.', { id: z.number() }, ({ id }) => db.deleteBodyMetric(id))

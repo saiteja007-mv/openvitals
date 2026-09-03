@@ -876,6 +876,11 @@ function unwrapOperation(op) {
 // SessionTimeInterval for nutrition-log/hydration-log: strictly start < end (fact 4) or Google
 // 400s with INVALID_TIME_RANGE. Caller passes one `startTime`; `endTime` is synthesized as
 // startTime+60s when omitted, matching fact 4's minimal fix for a one-shot "log this now".
+// startUtcOffset/endUtcOffset are "Required" in SessionTimeInterval, but Google ACCEPTS a write
+// without them and silently defaults the offset to 0 — the entry then shows in the app at the UTC
+// wall-clock time, not the user's. A 12:55 CDT water log filed as 17:55. Always send the real offset.
+const utcOffsetSeconds = (d) => `${-d.getTimezoneOffset() * 60}s`
+
 function sessionInterval(startTime, endTime) {
   if (!startTime) throw new Error('startTime is required.')
   const start = new Date(startTime)
@@ -884,7 +889,12 @@ function sessionInterval(startTime, endTime) {
   if (end && Number.isNaN(end.getTime())) throw new Error(`Invalid endTime "${endTime}".`)
   if (end && end <= start) throw new Error('endTime must be after startTime.')
   if (!end) end = new Date(start.getTime() + 60_000)
-  return { startTime: start.toISOString(), endTime: end.toISOString() }
+  return {
+    startTime: start.toISOString(),
+    startUtcOffset: utcOffsetSeconds(start),
+    endTime: end.toISOString(),
+    endUtcOffset: utcOffsetSeconds(end),
+  }
 }
 
 // Anonymous-food nutrition-log create (fact 8). Identified-food mode (referencing a Food
@@ -942,7 +952,8 @@ async function createWeight(accessToken, { physicalTime, weightGrams, notes } = 
   if (Number.isNaN(time.getTime())) throw new Error(`Invalid physicalTime "${physicalTime}".`)
   const op = await request('/users/me/dataTypes/weight/dataPoints', accessToken, {
     method: 'POST',
-    body: { weight: { sampleTime: { physicalTime: time.toISOString() }, weightGrams, ...(notes ? { notes } : {}) } },
+    // same offset rule as sessionInterval — without utcOffset the sample lands at UTC wall-clock time.
+    body: { weight: { sampleTime: { physicalTime: time.toISOString(), utcOffset: utcOffsetSeconds(time) }, weightGrams, ...(notes ? { notes } : {}) } },
   })
   return unwrapOperation(op)
 }

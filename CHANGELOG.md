@@ -2,6 +2,20 @@
 
 All notable changes to OpenVitals (health-mcp). Dates are the day the work landed on `main`.
 
+## [0.3.1] — 2026-09-03
+
+### Fixed
+- **Writes landed at UTC wall-clock time.** `SessionTimeInterval.startUtcOffset`/`endUtcOffset` and
+  `ObservationSampleTime.utcOffset` are documented as required but Google accepts a write without them and
+  silently defaults the offset to 0 — a 12:55 CDT water log filed as 17:55 in the app. All three write
+  paths now send the real local offset; tests assert it.
+
+### Changed
+- **Local-only tools now say so.** `log_meal`, `log_hydration` and `upsert_body_metric` write to this
+  server's SQLite database and never reach the Google Health / Fitbit app, but their descriptions did not
+  say that — so "log 750ml of water" naturally selected `log_hydration` and the entry never appeared in the
+  app. Each now states it is local-only and names the `*_to_google_health` tool to use instead.
+
 ## [0.3.0] — 2026-09-03
 
 ### Added

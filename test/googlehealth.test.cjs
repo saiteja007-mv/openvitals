@@ -358,7 +358,11 @@ test('createNutritionLog unwraps the Operation, synthesizes a 60s interval from 
     const body = JSON.parse(init.body)
     assert.equal(body.interval, undefined, 'fields must nest under nutritionLog, never sit at the body root')
     const nl = body.nutritionLog
-    assert.deepEqual(nl.interval, { startTime: '2026-09-01T12:00:00.000Z', endTime: '2026-09-01T12:01:00.000Z' })
+    assert.equal(nl.interval.startTime, '2026-09-01T12:00:00.000Z')
+    assert.equal(nl.interval.endTime, '2026-09-01T12:01:00.000Z')
+    // without these Google files the entry at UTC wall-clock time (a 12:55 CDT log shows as 17:55)
+    assert.match(nl.interval.startUtcOffset, /^-?\d+s$/)
+    assert.match(nl.interval.endUtcOffset, /^-?\d+s$/)
     assert.equal(nl.foodDisplayName, 'Banana')
     assert.equal(nl.mealType, 'SNACK')
     assert.equal(nl.serving.amount, 1)
@@ -410,7 +414,10 @@ test('createHydrationLog posts amountConsumed.milliliters with a synthesized int
     const raw = JSON.parse(init.body)
     assert.equal(raw.interval, undefined, 'fields must nest under hydrationLog, never sit at the body root')
     const body = raw.hydrationLog
-    assert.deepEqual(body.interval, { startTime: '2026-09-01T09:00:00.000Z', endTime: '2026-09-01T09:01:00.000Z' })
+    assert.equal(body.interval.startTime, '2026-09-01T09:00:00.000Z')
+    assert.equal(body.interval.endTime, '2026-09-01T09:01:00.000Z')
+    assert.match(body.interval.startUtcOffset, /^-?\d+s$/)
+    assert.match(body.interval.endUtcOffset, /^-?\d+s$/)
     assert.equal(body.amountConsumed.milliliters, 250)
     return operationOf({ name: 'users/me/dataTypes/hydration-log/dataPoints/456', hydrationLog: {} })
   }, async () => {
@@ -425,7 +432,8 @@ test('createWeight uses a point sampleTime (no interval) and passes weightGrams 
     const raw = JSON.parse(init.body)
     assert.equal(raw.sampleTime, undefined, 'fields must nest under weight, never sit at the body root')
     const body = raw.weight
-    assert.deepEqual(body.sampleTime, { physicalTime: '2026-09-01T09:00:00.000Z' })
+    assert.equal(body.sampleTime.physicalTime, '2026-09-01T09:00:00.000Z')
+    assert.match(body.sampleTime.utcOffset, /^-?\d+s$/, 'weight needs the offset too or it lands at UTC wall-clock time')
     assert.equal(body.weightGrams, 72_500)
     assert.equal(body.notes, 'morning')
     assert.equal(body.interval, undefined)
