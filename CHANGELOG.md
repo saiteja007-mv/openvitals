@@ -2,6 +2,20 @@
 
 All notable changes to OpenVitals (health-mcp). Dates are the day the work landed on `main`.
 
+## [0.4.1] — 2026-09-03
+
+### Changed
+- **`log_meal` and `log_hydration` now write to the Google Health app by default**, alongside the local
+  database, returning `google_health_name` for undo. `local_only: true` opts out.
+
+  Twice now a meal and a glass of water were logged from a chat app and never appeared in the Google Health
+  app, because the model picked the local-only tool — the obvious name for "log my meal". v0.3.1 tried to
+  fix that by rewriting the descriptions to say local-only and point at the `*_to_google_health` tool. That
+  is not enough: MCP clients cache the tool list at connect time, so a client that connected before the
+  change never saw the new wording, and steering tool choice by description is fragile even when it is
+  fresh. The obvious tool now does the thing the user meant. If the Google write fails the local row is
+  still saved and the response carries `google_health_error` rather than silently reporting success.
+
 ## [0.4.0] — 2026-09-03
 
 ### Added

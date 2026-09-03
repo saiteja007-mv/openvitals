@@ -379,9 +379,26 @@ export function buildServer(d) {
 
   // ===== Meals & nutrition =====
   T('list_meals', 'Logged meals in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listMeals({ from, to }))
-  T('log_meal', 'Log a meal to this server\'s LOCAL database only — it will NOT appear in the Google Health / Fitbit app. If the user wants the meal in their actual health app (usually what "log my meal" means), use log_meal_to_google_health instead.',
-    { name: z.string(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(), eaten_at: z.string().optional() },
-    (a) => db.createMeal({ ...a, eaten_at: a.eaten_at || localNow() }))
+  T('log_meal', 'Log a meal. Writes to the REAL Google Health / Fitbit app AND this server\'s local database, so it shows up where the user actually looks. Pass local_only:true to skip Google. Google does not deduplicate, so do not call twice for the same meal; undo the Google side with delete_google_health_entry using the returned google_health_name.',
+    { name: z.string(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(), eaten_at: z.string().optional(), local_only: z.boolean().optional() },
+    async ({ local_only, ...a }) => {
+      const eaten_at = a.eaten_at || localNow()
+      const row = db.createMeal({ ...a, eaten_at })
+      if (local_only) return { ...row, google_health_name: null, note: 'local only — not in the Google Health app' }
+      // Mirroring is the default because "log my meal" has meant the phone app both times a
+      // human said it here, and a description telling the model to pick the other tool did not
+      // survive a client with a cached tool list.
+      try {
+        const { name } = await googleHealth.writeMeal({
+          startTime: eaten_at, foodDisplayName: a.name, mealType: (a.meal_type || 'ANYTIME').toUpperCase(),
+          servingAmount: 1, calories: a.calories ?? 0, carbsG: a.carbs_g ?? 0, fatG: a.fat_g ?? 0, proteinG: a.protein_g,
+        })
+        return { ...row, google_health_name: name }
+      } catch (e) {
+        // The local row is already saved; say plainly that only half of it landed.
+        return { ...row, google_health_name: null, google_health_error: String(e.message || e).slice(0, 200) }
+      }
+    })
   T('update_meal', 'Update a logged meal by id.',
     { id: z.number(), name: z.string().optional(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional() },
     ({ id, ...p }) => db.updateMeal(id, p))
@@ -401,9 +418,19 @@ export function buildServer(d) {
   T('delete_meal_recipe', 'Delete a meal template by id.', { id: z.number() }, ({ id }) => db.deleteMealRecipe(id))
 
   // ===== Hydration (local hydration log; Google Health water is read-only) =====
-  T('log_hydration', 'Log water to this server\'s LOCAL database only — it will NOT appear in the Google Health / Fitbit app. If the user wants the water in their actual health app (usually what "log my water" means), use log_water_to_google_health instead.',
-    { ml: z.number(), at: z.string().describe('ISO datetime; default now').optional(), notes: z.string().optional() },
-    (a) => db.createHydration({ ...a, at: a.at || localNow() }))
+  T('log_hydration', 'Log water. Writes to the REAL Google Health / Fitbit app AND this server\'s local database. Pass local_only:true to skip Google. Google does not deduplicate, so do not call twice for the same drink; undo the Google side with delete_google_health_entry using the returned google_health_name.',
+    { ml: z.number(), at: z.string().describe('ISO datetime; default now').optional(), notes: z.string().optional(), local_only: z.boolean().optional() },
+    async ({ local_only, ...a }) => {
+      const at = a.at || localNow()
+      const row = db.createHydration({ ...a, at })
+      if (local_only) return { ...row, google_health_name: null, note: 'local only — not in the Google Health app' }
+      try {
+        const { name } = await googleHealth.writeHydration({ startTime: at, milliliters: a.ml })
+        return { ...row, google_health_name: name }
+      } catch (e) {
+        return { ...row, google_health_name: null, google_health_error: String(e.message || e).slice(0, 200) }
+      }
+    })
   T('list_hydration', 'Your logged water intake in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listHydration({ from, to }))
   T('delete_hydration', 'Delete a hydration log entry by id.', { id: z.number() }, ({ id }) => db.deleteHydration(id))
 
