@@ -110,13 +110,14 @@ async function waitForApiSlot() {
   if (slot > now) await new Promise((resolve) => setTimeout(resolve, slot - now))
 }
 
-async function request(path, accessToken, { method = 'GET', body, retryCount = 0 } = {}) {
+// raw: return the body as text (TCX export is XML, not JSON).
+async function request(path, accessToken, { method = 'GET', body, raw = false, retryCount = 0 } = {}) {
   await waitForApiSlot()
   const response = await fetchWithTimeout(path.startsWith('http') ? path : `${API_BASE}${path}`, {
     method,
     headers: {
       authorization: `Bearer ${accessToken}`,
-      accept: 'application/json',
+      accept: raw ? '*/*' : 'application/json',
       ...(body ? { 'content-type': 'application/json' } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -127,9 +128,9 @@ async function request(path, accessToken, { method = 'GET', body, retryCount = 0
       ? Math.min(30_000, retryAfter * 1000)
       : Math.min(30_000, 1_100 * (2 ** retryCount))
     await new Promise((resolve) => setTimeout(resolve, delay))
-    return request(path, accessToken, { method, body, retryCount: retryCount + 1 })
+    return request(path, accessToken, { method, body, raw, retryCount: retryCount + 1 })
   }
-  const payload = await response.json().catch(() => ({}))
+  const payload = raw && response.ok ? await response.text() : await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(payload?.error?.message || `Google Health ha risposto ${response.status}.`)
     error.status = response.status
@@ -175,12 +176,48 @@ function durationSeconds(value) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+// Every readable data type in the v4 DataPoint union (42 in today's discovery doc).
+// kind decides the filter member + page size; writeOnly types 400 on list/reconcile
+// ("create, update, batchDelete" only). filterMember overrides the kind default —
+// sleep rejects civil_start_time, ecg only accepts a physical start_time lower bound.
+const kinds = (kind, op, names, extra = {}) => Object.fromEntries(names.map((n) => [n, { kind, op, writeOnly: false, ...extra }]))
+const DATA_TYPES = {
+  ...kinds('sample', 'reconcile', ['heart-rate', 'heart-rate-variability', 'oxygen-saturation', 'weight', 'body-fat', 'height', 'blood-glucose', 'core-body-temperature', 'vo2-max', 'run-vo2-max', 'respiratory-rate-sleep-summary']),
+  ...kinds('sample', 'reconcile', ['symptoms', 'moods', 'ovulation-test'], { writeOnly: true }),
+  ...kinds('interval', 'reconcile', ['steps', 'distance', 'floors', 'altitude', 'active-minutes', 'active-zone-minutes', 'active-energy-burned', 'basal-energy-burned', 'sedentary-period', 'time-in-heart-rate-zone', 'activity-level', 'swim-lengths-data']),
+  ...kinds('interval', 'reconcile', ['menstrual-period'], { writeOnly: true }),
+  ...kinds('session', 'reconcile', ['exercise', 'nutrition-log', 'hydration-log']),
+  sleep: { kind: 'session', op: 'reconcile', writeOnly: false, filterMember: 'interval.civil_end_time' },
+  electrocardiogram: { kind: 'session', op: 'list', writeOnly: false, filterMember: 'interval.start_time' },
+  'irregular-rhythm-notification': { kind: 'session', op: 'list', writeOnly: false },
+  ...kinds('daily', 'reconcile', ['daily-resting-heart-rate', 'daily-heart-rate-variability', 'daily-oxygen-saturation', 'daily-respiratory-rate', 'daily-sleep-temperature-derivations', 'daily-vo2-max', 'daily-heart-rate-zones']),
+  ...kinds('catalog', 'list', ['food', 'food-measurement-unit']),
+}
+
+// recordType is a kind (or the legacy 'sleep'/'ecg' aliases) or an explicit member path.
+const FILTER_MEMBER = { sample: 'sample_time.civil_time', interval: 'interval.civil_start_time', session: 'interval.civil_start_time', daily: 'date', sleep: 'interval.civil_end_time', ecg: 'interval.start_time' }
 function dataFilter(type, recordType, start, end) {
-  if (recordType === 'daily') return `${type.replaceAll('-', '_')}.date >= "${start}" AND ${type.replaceAll('-', '_')}.date < "${end}"`
-  if (recordType === 'sleep') return `sleep.interval.civil_end_time >= "${start}" AND sleep.interval.civil_end_time < "${end}"`
-  if (recordType === 'ecg') return `electrocardiogram.interval.start_time >= "${start}T00:00:00Z"`
-  if (recordType === 'sample') return `${type.replaceAll('-', '_')}.sample_time.civil_time >= "${start}" AND ${type.replaceAll('-', '_')}.sample_time.civil_time < "${end}"`
-  return `${type.replaceAll('-', '_')}.interval.civil_start_time >= "${start}" AND ${type.replaceAll('-', '_')}.interval.civil_start_time < "${end}"`
+  const member = `${type.replaceAll('-', '_')}.${FILTER_MEMBER[recordType] || recordType}`
+  // physical (non-civil) start_time: the endpoint only takes the lower bound; callers trim the upper bound client-side
+  if (member.endsWith('.start_time')) return `${member} >= "${start}T00:00:00Z"`
+  return `${member} >= "${start}" AND ${member} < "${end}"`
+}
+
+// Follow nextPageToken up to maxPages; truncated=true means there was more.
+async function pageThrough(accessToken, type, baseParams, operation, maxPages) {
+  const endpoint = operation === 'list' ? 'dataPoints' : 'dataPoints:reconcile'
+  const dataPoints = []
+  let pageToken = ''
+  let pageCount = 0
+  do {
+    const params = new URLSearchParams(baseParams)
+    if (pageToken) params.set('pageToken', pageToken)
+    const page = await request(`/users/me/dataTypes/${type}/${endpoint}?${params}`, accessToken)
+    if (Array.isArray(page.dataPoints)) dataPoints.push(...page.dataPoints)
+    pageToken = page.nextPageToken || ''
+    pageCount += 1
+  } while (pageToken && pageCount < maxPages)
+  return { dataPoints, truncated: Boolean(pageToken) }
 }
 
 async function listData(accessToken, type, recordType, start, end, dataSourceFamily = 'all-sources', operation = 'reconcile') {
@@ -189,20 +226,33 @@ async function listData(accessToken, type, recordType, start, end, dataSourceFam
     pageSize: type === 'sleep' || type === 'exercise' ? '25' : '10000',
   }
   if (operation === 'reconcile') baseParams.dataSourceFamily = `users/me/dataSourceFamilies/${dataSourceFamily}`
-  const endpoint = operation === 'list' ? 'dataPoints' : 'dataPoints:reconcile'
-  const merged = { dataPoints: [] }
-  let pageToken = ''
-  let pageCount = 0
-  do {
-    const params = new URLSearchParams(baseParams)
-    if (pageToken) params.set('pageToken', pageToken)
-    const page = await request(`/users/me/dataTypes/${type}/${endpoint}?${params}`, accessToken)
-    if (Array.isArray(page.dataPoints)) merged.dataPoints.push(...page.dataPoints)
-    pageToken = page.nextPageToken || ''
-    pageCount += 1
-    if (pageCount >= 100 && pageToken) throw new Error(`Google Health ha restituito troppe pagine per ${type}.`)
-  } while (pageToken)
-  return merged
+  const { dataPoints, truncated } = await pageThrough(accessToken, type, baseParams, operation, 100)
+  if (truncated) throw new Error(`Google Health ha restituito troppe pagine per ${type}.`)
+  return { dataPoints } // shape is stored verbatim in some endpoints (irn alerts, glucose) — keep it
+}
+
+// Generic escape hatch over every readable type. Raw dataPoints, no translation.
+async function queryDataPoints(accessToken, dataType, from, to, { maxPages } = {}) {
+  const meta = DATA_TYPES[dataType]
+  if (!meta) throw new Error(`Unknown Google Health data type "${dataType}". Valid: ${Object.keys(DATA_TYPES).join(', ')}`)
+  if (meta.writeOnly) throw new Error(`${dataType} is write-only in Google Health (create/update/batchDelete only); it cannot be read.`)
+  // Only exercise and sleep actually cap at 25 server-side (mirrors listData); the other session
+  // kinds (nutrition-log, hydration-log, electrocardiogram, irregular-rhythm-notification) take
+  // 1000 and paginating them at 25 was 40x more calls than needed (LOW: runtime-R6).
+  const params = { pageSize: dataType === 'exercise' || dataType === 'sleep' ? '25' : '1000' }
+  if (meta.kind !== 'catalog') params.filter = dataFilter(dataType, meta.filterMember || meta.kind, from, to)
+  if (meta.op === 'reconcile') params.dataSourceFamily = 'users/me/dataSourceFamilies/all-sources'
+  // sample/interval defaults were unbounded (pageSize 1000 x 20 pages = up to 20k points, multi-MB
+  // once pretty-printed) — cap the default; an explicit max_pages (the tool caps it at 100) overrides.
+  const pages = maxPages ?? (meta.kind === 'sample' || meta.kind === 'interval' ? 2 : 20)
+  let { dataPoints, truncated } = await pageThrough(accessToken, dataType, params, meta.op, pages)
+  // electrocardiogram's filter has no upper bound (physical start_time >= from only, see dataFilter) —
+  // trim to `to` here so this generic reader honors the range like every other kind does.
+  if (meta.filterMember === 'interval.start_time') {
+    const upper = `${to}T00:00:00Z`
+    dataPoints = dataPoints.filter((p) => { const t = p[dataType]?.interval?.startTime; return !t || t < upper })
+  }
+  return { data_type: dataType, kind: meta.kind, count: dataPoints.length, truncated, data_points: dataPoints }
 }
 
 function dailyRollup(accessToken, type, start, end) {
@@ -254,6 +304,8 @@ async function syncGoogleHealthData(accessToken, selectedDate, onProgress = () =
     ['irnProfileRaw', () => request('/users/me/irnProfile', accessToken)],
     ['irnAlertsRaw', () => listData(accessToken, 'irregular-rhythm-notification', 'session', trendStart, dayAfter, 'all-sources', 'list')],
     ['glucoseRaw', () => listData(accessToken, 'blood-glucose', 'sample', trendStart, dayAfter)],
+    ['heartRateZonesRaw', () => listData(accessToken, 'daily-heart-rate-zones', 'daily', trendStart, dayAfter)],
+    ['breathingSleepRaw', () => listData(accessToken, 'respiratory-rate-sleep-summary', 'sample', trendStart, dayAfter)],
   ]
   const endpoints = {}
   const errors = []
@@ -516,14 +568,6 @@ function translateGoogleHealth(raw, selectedDate) {
     const end = exercise.interval?.endTime || ''
     const intervalDuration = (new Date(end) - new Date(start)) / 1000
     const duration = durationSeconds(exercise.activeDuration) || (Number.isFinite(intervalDuration) ? Math.max(0, intervalDuration) : 0)
-    const zoneDurations = summary.heartRateZoneDurations || {}
-    const zoneMinutes = (value) => value === undefined || value === null ? null : durationSeconds(value) / 60
-    const heartZoneMinutes = Object.keys(zoneDurations).length ? {
-      light: zoneMinutes(zoneDurations.lightTime),
-      moderate: zoneMinutes(zoneDurations.moderateTime),
-      vigorous: zoneMinutes(zoneDurations.vigorousTime),
-      peak: zoneMinutes(zoneDurations.peakTime),
-    } : null
     return {
       logId: point.dataPointName ?? point.name,
       activityName: exercise.displayName || String(exercise.exerciseType || 'Activity').replaceAll('_', ' '),
@@ -534,10 +578,29 @@ function translateGoogleHealth(raw, selectedDate) {
       averageHeartRate: summary.averageHeartRateBeatsPerMinute,
       steps: numeric(summary.steps),
       averagePaceSecondsPerMeter: numeric(summary.averagePaceSecondsPerMeter),
-      heartZoneMinutes,
+      heartZoneMinutes: heartZoneMinutes(summary),
       activeZoneMinutes: { totalMinutes: summary.activeZoneMinutes },
     }
   })
+  const heartRateZones = dataPoints(raw.heartRateZonesRaw).map((point) => {
+    const record = point.dailyHeartRateZones || {}
+    return {
+      date: dateFromCivil(record.date),
+      zones: (record.heartRateZones || []).map((zone) => ({ type: zone.heartRateZoneType, min: numeric(zone.minBeatsPerMinute), max: numeric(zone.maxBeatsPerMinute) })),
+    }
+  }).filter((item) => item.date).sort((a, b) => a.date.localeCompare(b.date))
+  const breathingSleep = dataPoints(raw.breathingSleepRaw).map((point) => {
+    const record = point.respiratoryRateSleepSummary || {}
+    const stage = (stats) => stats ? { bpm: numeric(stats.breathsPerMinute), sd: numeric(stats.standardDeviation), snr: numeric(stats.signalToNoise) } : null
+    return {
+      date: dateFromCivil(record.sampleTime?.civilTime) || record.sampleTime?.physicalTime?.slice(0, 10) || null,
+      time: timeFromCivil(record.sampleTime?.civilTime),
+      deep: stage(record.deepSleepStats),
+      light: stage(record.lightSleepStats),
+      rem: stage(record.remSleepStats),
+      full: stage(record.fullSleepStats),
+    }
+  }).filter((item) => item.date).sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
 
   return {
     profile: { user: { displayName: userInfo.name || 'Atleta', avatar640: userInfo.picture || null, memberSince: membershipDate, timezone: settings.timeZone || null } },
@@ -617,7 +680,92 @@ function translateGoogleHealth(raw, selectedDate) {
       ? { irregularRhythm: { profile: raw.irnProfileRaw, alerts: raw.irnAlertsRaw } }
       : {}),
     bloodGlucose: raw.glucoseRaw,
+    heartRateZones: { values: heartRateZones },
+    breathingSleep: { values: breathingSleep },
   }
+}
+
+// minutes per HR zone from a metricsSummary; null when the summary has no zone data
+function heartZoneMinutes(summary) {
+  const zones = summary?.heartRateZoneDurations || {}
+  if (!Object.keys(zones).length) return null
+  const minutes = (value) => value === undefined || value === null ? null : durationSeconds(value) / 60
+  return { light: minutes(zones.lightTime), moderate: minutes(zones.moderateTime), vigorous: minutes(zones.vigorousTime), peak: minutes(zones.peakTime) }
+}
+
+// Reconciled exercise intervals carry no civilStartTime (only the GET does), so the civil
+// date is start + utc offset.
+function civilDateFromOffset(isoTime, utcOffset) {
+  if (!isoTime) return null
+  const ms = new Date(isoTime).getTime() + durationSeconds(utcOffset) * 1000
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : null
+}
+
+// Google Health Exercise → Session. Google records NO sets/reps/exercise names: strength
+// sessions are exerciseType WORKOUT with displayName = muscle group. Sets live in the local
+// workouts table, linked by session_id.
+function toSession(point) {
+  const exercise = point.exercise || {}
+  const summary = exercise.metricsSummary || {}
+  const interval = exercise.interval || {}
+  const secs = (value) => value === undefined || value === null ? null : durationSeconds(value)
+  const elapsed = (new Date(interval.endTime) - new Date(interval.startTime)) / 1000
+  const events = (exercise.exerciseEvents || []).map((event) => ({ time: event.eventTime, type: event.exerciseEventType }))
+  const source = point.dataSource // reconcile omits dataSource → null for listed sessions; fetchExerciseSession (dataPoints.get) has it
+  return {
+    session_id: point.dataPointName ?? point.name,
+    date: dateFromCivil(interval.civilStartTime) || civilDateFromOffset(interval.startTime, interval.startUtcOffset),
+    start_time: interval.startTime ?? null,
+    end_time: interval.endTime ?? null,
+    utc_offset_s: secs(interval.startUtcOffset),
+    exercise_type: exercise.exerciseType ?? null,
+    name: exercise.displayName ?? null,
+    active_duration_s: secs(exercise.activeDuration),
+    elapsed_s: Number.isFinite(elapsed) ? Math.max(0, elapsed) : null,
+    calories_kcal: numeric(summary.caloriesKcal),
+    distance_m: numeric(summary.distanceMillimeters, (value) => value / 1000),
+    steps: numeric(summary.steps),
+    avg_hr_bpm: numeric(summary.averageHeartRateBeatsPerMinute),
+    avg_pace_s_per_m: numeric(summary.averagePaceSecondsPerMeter),
+    avg_speed_m_s: numeric(summary.averageSpeedMillimetersPerSecond, (value) => value / 1000),
+    elevation_gain_m: numeric(summary.elevationGainMillimeters, (value) => value / 1000),
+    active_zone_minutes: numeric(summary.activeZoneMinutes),
+    hr_zones_min: heartZoneMinutes(summary),
+    events,
+    // Fitbit emits a terminal PAUSE (no matching RESUME) right before STOP/end-of-events on
+    // sessions that were never actually paused — only count pauses that were resumed.
+    pauses: events.filter((event, i) => /PAUSE$/.test(event.type) && /RESUME$/.test(events[i + 1]?.type || '')).length,
+    laps: exercise.splitSummaries || [],
+    splits: exercise.splits || [],
+    notes: exercise.notes ?? null,
+    has_gps: exercise.exerciseMetadata?.hasGps === true,
+    source: source ? { platform: source.platform ?? null, recording_method: source.recordingMethod ?? null } : null,
+    create_time: exercise.createTime ?? null,
+    update_time: exercise.updateTime ?? null,
+    raw: exercise,
+  }
+}
+
+// Every exercise session with a civil start in [from, to).
+async function fetchExerciseSessions(accessToken, from, to) {
+  const listed = await listData(accessToken, 'exercise', 'session', from, to)
+  // date is NOT NULL in gh_exercise_sessions — a point with no interval.startTime would otherwise
+  // fail the whole batch's upsert transaction and cache nothing for the range (LOW: schema-null-date-aborts-batch).
+  return { sessions: dataPoints(listed).map(toSession).filter((session) => session.session_id && session.date) }
+}
+
+// Per-point endpoints only accept the "me" alias; reconcile hands back numeric user ids.
+const pointName = (sessionId) => /^\d+$/.test(sessionId) ? `users/me/dataTypes/exercise/dataPoints/${sessionId}` : sessionId.replace(/^users\/[^/]+\//, 'users/me/')
+
+// One session via dataPoints.get — the only read that carries dataSource (reconcile omits it),
+// so this is how a cached session gets its `source` filled in.
+async function fetchExerciseSession(accessToken, sessionId) {
+  return toSession(await request(`/${pointName(sessionId)}`, accessToken))
+}
+
+// TCX (GPS track + laps) for one session. Only meaningful when has_gps.
+function exportExerciseTcx(accessToken, sessionId) {
+  return request(`/${pointName(sessionId)}:exportExerciseTcx?alt=media`, accessToken, { raw: true })
 }
 
 // grams for a nutrient by name from a nutritionLog.nutrients[] array
@@ -628,6 +776,11 @@ function nutrientGrams(nl, names) {
     if (found) return numeric(found.quantity?.grams ?? found.quantity?.gramsSum)
   }
   return null
+}
+
+// every nutrient present → { NUTRIENT: grams } (items carry grams, rollups gramsSum)
+function nutrientMap(nl) {
+  return Object.fromEntries((nl.nutrients || []).filter((x) => x.nutrient).map((x) => [x.nutrient, numeric(x.quantity?.grams ?? x.quantity?.gramsSum)]))
 }
 
 function civilStartToLocalIso(cst) {
@@ -641,22 +794,10 @@ function civilStartToLocalIso(cst) {
 }
 
 // Full nutrition history for [from, to): per-day macro totals + individual food items.
+// The rollup's nutrients[] is sparse (live: only PROTEIN/DIETARY_FIBER/SODIUM even when the
+// day's items carry SUGAR/SATURATED_FAT/…), so per-day totals are the rollup where it speaks
+// and the sum of that day's items otherwise — keeps get_nutrition_intake and get_food_log agreeing.
 async function fetchNutritionLog(accessToken, from, to) {
-  const rollup = await dailyRollup(accessToken, 'nutrition-log', from, to)
-  const daily = rollupPoints(rollup).map((pt) => {
-    const nl = pt.nutritionLog || {}
-    return {
-      date: dateFromCivil(pt.civilStartTime),
-      calories: numeric(nl.energy?.kcalSum),
-      protein: nutrientGrams(nl, ['PROTEIN']),
-      carbs: numeric(nl.totalCarbohydrate?.gramsSum) ?? nutrientGrams(nl, ['CARBOHYDRATES', 'TOTAL_CARBOHYDRATE']),
-      fat: numeric(nl.totalFat?.gramsSum) ?? nutrientGrams(nl, ['TOTAL_FAT', 'FAT']),
-      fiber: nutrientGrams(nl, ['DIETARY_FIBER']),
-      sugar: nutrientGrams(nl, ['SUGAR']),
-      sodium: nutrientGrams(nl, ['SODIUM']),
-    }
-  }).filter((r) => r.date)
-
   const listed = await listData(accessToken, 'nutrition-log', 'interval', from, to, 'all-sources', 'reconcile')
   const items = (listed.dataPoints || []).map((pt) => {
     const nl = pt.nutritionLog || {}
@@ -671,8 +812,45 @@ async function fetchNutritionLog(accessToken, from, to) {
       protein: nutrientGrams(nl, ['PROTEIN']),
       carbs: numeric(nl.totalCarbohydrate?.grams) ?? nutrientGrams(nl, ['CARBOHYDRATES', 'TOTAL_CARBOHYDRATE']),
       fat: numeric(nl.totalFat?.grams) ?? nutrientGrams(nl, ['TOTAL_FAT', 'FAT']),
+      serving_amount: numeric(nl.serving?.amount),
+      serving_unit: nl.serving?.foodMeasurementUnitDisplayName ?? null,
+      energy_from_fat: numeric(nl.energyFromFat?.kcal),
+      fiber: nutrientGrams(nl, ['DIETARY_FIBER']),
+      sugar: nutrientGrams(nl, ['SUGAR']),
+      sodium: nutrientGrams(nl, ['SODIUM']),
+      saturated_fat: nutrientGrams(nl, ['SATURATED_FAT']),
+      cholesterol: nutrientGrams(nl, ['CHOLESTEROL']),
+      food_ref: nl.food ?? null,
+      nutrients: nutrientMap(nl),
     }
   }).filter((r) => r.date && r.item_key)
+
+  const itemSums = {} // date → { NUTRIENT: grams summed over that day's items }
+  for (const it of items) {
+    const acc = itemSums[it.date] ??= {}
+    for (const [k, v] of Object.entries(it.nutrients)) if (v !== null) acc[k] = (acc[k] ?? 0) + v
+  }
+
+  const rollup = await dailyRollup(accessToken, 'nutrition-log', from, to)
+  const daily = rollupPoints(rollup).map((pt) => {
+    const nl = pt.nutritionLog || {}
+    const date = dateFromCivil(pt.civilStartTime)
+    const nutrients = { ...itemSums[date], ...nutrientMap(nl) } // rollup wins where present
+    const g = (name) => nutrients[name] ?? null
+    return {
+      date,
+      calories: numeric(nl.energy?.kcalSum),
+      protein: g('PROTEIN'),
+      carbs: numeric(nl.totalCarbohydrate?.gramsSum) ?? g('CARBOHYDRATES') ?? g('TOTAL_CARBOHYDRATE'),
+      fat: numeric(nl.totalFat?.gramsSum) ?? g('TOTAL_FAT') ?? g('FAT'),
+      fiber: g('DIETARY_FIBER'),
+      sugar: g('SUGAR'),
+      sodium: g('SODIUM'),
+      saturated_fat: g('SATURATED_FAT'),
+      cholesterol: g('CHOLESTEROL'),
+      nutrients,
+    }
+  }).filter((r) => r.date)
 
   return { daily, items }
 }
@@ -687,5 +865,10 @@ module.exports = {
   revokeToken,
   syncData: syncGoogleHealthData,
   fetchNutritionLog,
-  __test: { translateGoogleHealth, dateFromCivil, durationSeconds },
+  DATA_TYPES,
+  fetchExerciseSessions,
+  fetchExerciseSession,
+  exportExerciseTcx,
+  queryDataPoints,
+  __test: { translateGoogleHealth, dateFromCivil, durationSeconds, dataFilter, toSession },
 }

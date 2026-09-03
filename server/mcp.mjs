@@ -6,6 +6,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
 import crypto from 'node:crypto'
+import { createRequire } from 'node:module'
+
+// One version, from package.json — the server string and the npm version had drifted apart (2.0.0 vs 0.1.0).
+const { version: VERSION } = createRequire(import.meta.url)('../package.json')
 
 // Constant-time token compare — same approach as auth.cjs, so a network timing side channel
 // can't leak the bearer token byte by byte.
@@ -26,35 +30,94 @@ const shift = (dateStr, n) => { const d = new Date(dateStr + 'T00:00:00Z'); d.se
 const nextDay = (dateStr) => shift(dateStr, 1)
 const r0 = (v) => (v == null ? null : Math.round(v))
 const r1 = (v) => (v == null ? null : Math.round(v * 10) / 10)
-const fmtFood = (i) => ({ time: i.eaten_at ? i.eaten_at.slice(11, 16) : null, meal: i.meal_type, food: i.food_name, calories: r0(i.calories), protein_g: r1(i.protein), carbs_g: r1(i.carbs), fat_g: r1(i.fat) })
+// Google reports sodium/cholesterol in grams at trace scale (0.005-0.125g) — r1 rounds every
+// real-world value to 0. mg keeps the precision that matters for these two.
+const mg = (v) => (v == null ? null : Math.round(v * 1000))
+// serving is "1 cup" style — Google splits amount/unit; keep both so a re-log can reuse the unit.
+const fmtFood = (i) => ({
+  time: i.eaten_at ? i.eaten_at.slice(11, 16) : null, meal: i.meal_type, food: i.food_name,
+  serving: i.serving_amount != null || i.serving_unit ? { amount: i.serving_amount ?? null, unit: i.serving_unit ?? null } : null,
+  calories: r0(i.calories), protein_g: r1(i.protein), carbs_g: r1(i.carbs), fat_g: r1(i.fat),
+  fiber_g: r1(i.fiber), sugar_g: r1(i.sugar), sodium_mg: mg(i.sodium), saturated_fat_g: r1(i.saturated_fat), cholesterol_mg: mg(i.cholesterol),
+  nutrients: i.nutrients || {},
+})
+const MACROS = ['calories', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg']
+const sumMacros = (foods) => Object.fromEntries(MACROS.map((k) => [k, r1(foods.reduce((a, f) => a + (f[k] || 0), 0))]))
+// Google's NutritionLog.mealType enum, in day order — group_by_meal emits meals in this order.
+const MEAL_ORDER = ['BEFORE_BREAKFAST', 'BREAKFAST', 'BEFORE_LUNCH', 'LUNCH', 'BEFORE_DINNER', 'DINNER', 'AFTER_DINNER', 'SNACK', 'ANYTIME']
+const mealRank = (m) => { const i = MEAL_ORDER.indexOf(m); return i < 0 ? MEAL_ORDER.length : i }
+const dropNulls = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null))
+// Compact session for lists (≤ ~300 B): no raw/events/laps/splits (get_exercise_session has those),
+// nulls dropped — an indoor WORKOUT has no distance/steps/gps and listing that is noise.
+const fmtSession = (s) => dropNulls({
+  session_id: s.session_id, date: s.date, start_time: s.start_time, end_time: s.end_time, exercise_type: s.exercise_type, name: s.name,
+  active_min: s.active_duration_s == null ? null : r1(s.active_duration_s / 60), calories_kcal: r0(s.calories_kcal), distance_m: r0(s.distance_m),
+  steps: s.steps ?? null, avg_hr_bpm: r0(s.avg_hr_bpm), active_zone_minutes: s.active_zone_minutes ?? null, hr_zones_min: s.hr_zones_min ?? null,
+  pauses: s.pauses ?? null, has_gps: s.has_gps ?? null, notes: s.notes ?? null,
+})
+// A logged set attached to a session. id kept so the caller can update_workout/delete_workout it.
+const fmtSet = (w) => ({ id: w.id, name: w.name, sets: w.sets, reps: w.reps, weight_kg: w.weight_kg, duration_min: w.duration_min, notes: w.notes })
 const ok = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj ?? null, null, 2) }] })
 const fail = (e) => ({ content: [{ type: 'text', text: 'Error: ' + (e?.message || e) }], isError: true })
 const wrap = (fn) => async (args) => { try { return ok(await fn(args || {})) } catch (e) { return fail(e) } }
 
 // Google Health endpoint keys present in the cached sync payload.
-const HEALTH_METRICS = ['profile', 'devices', 'activity', 'activityGoals', 'stepsIntraday', 'caloriesIntraday', 'heartIntraday', 'sleep', 'sleepTrend', 'sleepGoal', 'stepsTrend', 'caloriesTrend', 'heartTrend', 'metricTrends', 'bodyWeight', 'bodyFat', 'weightGoal', 'water', 'waterGoal', 'food', 'breathing', 'hrv', 'spo2', 'skinTemperature', 'coreTemperature', 'cardio', 'ecg', 'activities', 'identity', 'bloodGlucose']
+const HEALTH_METRICS = ['profile', 'devices', 'activity', 'activityGoals', 'stepsIntraday', 'caloriesIntraday', 'heartIntraday', 'sleep', 'sleepTrend', 'sleepGoal', 'stepsTrend', 'caloriesTrend', 'heartTrend', 'metricTrends', 'bodyWeight', 'bodyFat', 'weightGoal', 'water', 'waterGoal', 'food', 'breathing', 'hrv', 'spo2', 'skinTemperature', 'coreTemperature', 'cardio', 'ecg', 'activities', 'identity', 'bloodGlucose', 'heartRateZones', 'breathingSleep']
 
-function buildServer(d) {
+export function buildServer(d) {
   const { db, googleHealth, summary, weekly, progress, recommend, exercises, food, reminders } = d
-  const s = new McpServer({ name: 'health-mcp', version: '2.0.0' })
-  const health = () => googleHealth.getHealth().then((h) => h?.data ?? null).catch(() => null)
-  const ep = async (key) => { const c = await health(); return c?.endpoints?.[key] ?? null }
+  const s = new McpServer({ name: 'health-mcp', version: VERSION })
+  // date is optional and defaults to today. A past date is served from the local gh_daily
+  // cache with no Google API call; today always goes live.
+  const health = (date) => googleHealth.getHealth(date).then((h) => h?.data ?? null).catch(() => null)
+  const ep = async (key, date) => { const c = await health(date); return c?.endpoints?.[key] ?? null }
+  const onDate = { date: z.string().describe('YYYY-MM-DD; default today. Past dates come from the local cache.').optional() }
   const T = (name, desc, shape, fn) => s.tool(name, desc, shape, wrap(fn))
+  const range = { from: z.string().describe('YYYY-MM-DD').optional(), to: z.string().describe('YYYY-MM-DD, exclusive').optional() }
+  // Cache-first sessions for [from,to). A finished day never changes, so a range fully in the
+  // past comes straight from disk. Refetch the WHOLE range (not just [today,to)) when asked, when
+  // the cache has nothing for it (never synced), or when the range touches today — a session can
+  // land on Google well after its civil day ends (watch/phone sync lag, edits in the Fitbit app),
+  // so a partial-touch refetch would permanently miss anything that synced late for an already-
+  // cached day. Cost is bounded: exercise pages at 25/call and typical ranges are ≤30 days.
+  const sessionsFor = async (from, to, refresh) => {
+    let rows = db.listExerciseSessions({ from, to })
+    const liveFrom = refresh || !rows.length || to > today() ? from : null
+    if (liveFrom) {
+      const { sessions } = await googleHealth.fetchExerciseSessions(liveFrom, to)
+      db.cacheExerciseSessions(sessions)
+      rows = db.listExerciseSessions({ from, to })
+    }
+    return rows
+  }
+  const withSets = (s) => ({ ...s, logged_sets: db.listWorkouts({ session_id: s.session_id }).map(fmtSet) })
   const planItem = z.object({ name: z.string(), exercise_id: z.string().optional(), target_sets: z.number().optional(), target_reps: z.number().optional(), target_weight_kg: z.number().optional() })
 
-  // ===== Google Health data points (read-only — Google Health has no write API) =====
+  // ===== Google Health data points (read-only here; the v4 API also supports create/patch/batchDelete
+  // under *.writeonly scopes, which this server does not request) =====
   T('get_status', 'App + Google-Health sync status.', {}, async () => ({ app: 'health-mcp', googleHealth: await googleHealth.getStatus() }))
-  T('get_health', 'Full raw cached Google Health payload (all endpoints).', {}, () => googleHealth.getHealth())
-  T('get_health_metric', 'Read one Google Health data point by name.',
-    { metric: z.enum(HEALTH_METRICS).describe('which health endpoint to read') }, ({ metric }) => ep(metric))
-  T('get_activity', 'Steps, calories out, distance, floors, active/zone/sedentary minutes (+ goals + trends).', {},
-    async () => ({ activity: await ep('activity'), goals: await ep('activityGoals'), trends: await ep('metricTrends') }))
-  T('get_heart', 'Heart rate: intraday, trend, resting, HRV, cardio fitness.', {},
-    async () => ({ intraday: await ep('heartIntraday'), trend: await ep('heartTrend'), hrv: await ep('hrv'), cardio: await ep('cardio') }))
-  T('get_sleep', 'Sleep sessions, sleep trend, and sleep goal.', {},
-    async () => ({ sleep: await ep('sleep'), trend: await ep('sleepTrend'), goal: await ep('sleepGoal') }))
-  T('get_hydration', 'Google Health water intake + water goal (use list_hydration for your own logged water).', {},
-    async () => ({ water: await ep('water'), goal: await ep('waterGoal') }))
+  T('get_health', 'Full raw Google Health payload (all endpoints) for a date. Defaults to today (live); past dates are served from the local cache.',
+    onDate, ({ date }) => googleHealth.getHealth(date))
+  T('get_health_metric', 'Read one Google Health data point by name, for a date (default today).',
+    { metric: z.enum(HEALTH_METRICS).describe('which health endpoint to read'), ...onDate }, ({ metric, date }) => ep(metric, date))
+  T('get_activity', 'Steps, calories out, distance, floors, active/zone/sedentary minutes (+ goals + trends).', onDate,
+    async ({ date }) => ({ activity: await ep('activity', date), goals: await ep('activityGoals', date), trends: await ep('metricTrends', date) }))
+  T('get_heart', 'Heart rate: intraday, trend, resting, HRV, cardio fitness, and the day\'s HR zone boundaries (bpm min/max per zone). Note: intraday is live-only and absent for cached past dates.', onDate,
+    async ({ date }) => ({ intraday: await ep('heartIntraday', date), trend: await ep('heartTrend', date), hrv: await ep('hrv', date), cardio: await ep('cardio', date), zones: await ep('heartRateZones', date) }))
+  T('get_sleep', 'Sleep sessions, sleep trend, and sleep goal.', onDate,
+    async ({ date }) => ({ sleep: await ep('sleep', date), trend: await ep('sleepTrend', date), goal: await ep('sleepGoal', date) }))
+  T('get_hydration', 'Google Health water intake + water goal (use list_hydration for your own logged water).', onDate,
+    async ({ date }) => ({ water: await ep('water', date), goal: await ep('waterGoal', date) }))
+  T('get_health_cache_status', 'Which dates of Google Health history are stored locally (days, range, size).', {},
+    () => ({ ...googleHealth.cacheStats(), note: 'Past dates in this range are served from disk with no Google API call. Extend it with backfill_google_health.' }))
+  T('backfill_google_health', 'Fetch and locally cache Google Health history for a date range so past dates load without hitting the API. from/to are YYYY-MM-DD (to is exclusive). Capped at 8 days per call because each date costs ~31 rate-limited API calls; for a longer backfill run `node server/backfill-gh.cjs <from> <to>` on the host instead.',
+    { from: z.string(), to: z.string(), force: z.boolean().optional() },
+    async ({ from, to, force }) => {
+      const span = Math.round((new Date(to + 'T00:00:00Z') - new Date(from + 'T00:00:00Z')) / 86_400_000)
+      if (!(span > 0)) return { error: 'to must be after from' }
+      if (span > 8) return { error: `range is ${span} days; this tool is capped at 8. Run: node server/backfill-gh.cjs ${from} ${to}` }
+      return googleHealth.backfill(from, to, { force: Boolean(force) })
+    })
   T('get_nutrition_intake', 'Calories + full macros (protein/carbs/fat/fiber) AND the list of foods you ate on a date, from your Google Health food log (cached by sync_nutrition_cache). Falls back to live Google Health calories, then meals logged via this tool. Defaults to today.',
     { date: z.string().optional() },
     async ({ date }) => {
@@ -65,7 +128,8 @@ function buildServer(d) {
         return {
           date: dt, source: 'google_health',
           calories: r0(cached.calories), protein_g: r1(cached.protein), carbs_g: r1(cached.carbs),
-          fat_g: r1(cached.fat), fiber_g: r1(cached.fiber), sugar_g: r1(cached.sugar), sodium_g: r1(cached.sodium),
+          fat_g: r1(cached.fat), fiber_g: r1(cached.fiber), sugar_g: r1(cached.sugar), sodium_mg: mg(cached.sodium),
+          saturated_fat_g: r1(cached.saturated_fat), cholesterol_mg: mg(cached.cholesterol), nutrients: cached.nutrients || {},
           foods, cachedAt: cached.updated_at,
         }
       }
@@ -83,12 +147,18 @@ function buildServer(d) {
         note: 'This date is not in the nutrition cache (macros + foods). Run sync_nutrition_cache to backfill it.',
       }
     })
-  T('get_food_log', 'The individual foods/items you logged on a date (name, meal type, time, calories, macros) from Google Health. Defaults to today.',
-    { date: z.string().optional() },
-    ({ date }) => {
+  T('get_food_log', 'The individual foods/items you logged on a date from Google Health: name, meal type, time, serving {amount, unit}, calories, protein/carbs/fat/fiber/sugar/saturated fat (grams), sodium/cholesterol (milligrams — trace amounts round to 0 in grams), and a `nutrients` object with every nutrient Google recorded (e.g. CALCIUM, IRON, VITAMIN_C in grams). Defaults to today. group_by_meal buckets items by meal type in day order with per-meal totals.',
+    { date: z.string().optional(), group_by_meal: z.boolean().optional() },
+    ({ date, group_by_meal }) => {
       const dt = date || today()
       const foods = db.listFoodItems({ from: dt, to: nextDay(dt) }).map(fmtFood)
-      return { date: dt, count: foods.length, foods }
+      if (!group_by_meal) return { date: dt, count: foods.length, foods }
+      const meals = {}
+      for (const m of [...new Set(foods.map((f) => f.meal || 'ANYTIME'))].sort((a, b) => mealRank(a) - mealRank(b))) {
+        const items = foods.filter((f) => (f.meal || 'ANYTIME') === m)
+        meals[m] = { items, totals: sumMacros(items) }
+      }
+      return { date: dt, count: foods.length, meals, totals: sumMacros(foods) }
     })
   T('sync_nutrition_cache', 'Fetch nutrition (daily macro totals + individual food items) from Google Health for a date range and cache it locally. Defaults to the last 14 days; pass a wider range to backfill. from/to are YYYY-MM-DD (to is exclusive).',
     { from: z.string().optional(), to: z.string().optional() },
@@ -103,7 +173,8 @@ function buildServer(d) {
     async () => ({ weight: await ep('bodyWeight'), bodyFat: await ep('bodyFat'), goal: await ep('weightGoal') }))
   T('get_glucose', 'Blood glucose readings.', {}, () => ep('bloodGlucose'))
   T('get_spo2', 'Blood oxygen saturation (SpO2).', {}, () => ep('spo2'))
-  T('get_breathing', 'Breathing / respiratory rate.', {}, () => ep('breathing'))
+  T('get_breathing', 'Breathing / respiratory rate, plus per-sleep-stage breathing (deep/light/rem/full: bpm, sd, snr).', onDate,
+    async ({ date }) => ({ breathing: await ep('breathing', date), sleep_stages: await ep('breathingSleep', date) }))
   T('get_temperature', 'Skin and core body temperature.', {}, async () => ({ skin: await ep('skinTemperature'), core: await ep('coreTemperature') }))
   T('get_devices', 'Connected Google Health devices.', {}, () => ep('devices'))
   T('sync_google_health', 'Pull the latest Google Health data into the health store.', {}, () => googleHealth.sync())
@@ -138,15 +209,84 @@ function buildServer(d) {
   T('export_all', 'Export the entire health database (all tables) as JSON.', {}, () => db.exportAll())
 
   // ===== Workouts =====
-  T('list_workouts', 'Logged workouts in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listWorkouts({ from, to }))
-  T('log_workout', 'Log a completed exercise set.',
-    { name: z.string(), sets: z.number().optional(), reps: z.number().optional(), weight_kg: z.number().optional(), duration_min: z.number().optional(), exercise_id: z.string().optional(), plan_id: z.number().optional(), notes: z.string().optional(), performed_at: z.string().optional() },
+  T('list_workouts', 'Logged workouts (sets) in a date range; session_id narrows to the sets attached to one Google Health exercise session.', { ...range, session_id: z.string().optional() }, (a) => db.listWorkouts(a))
+  T('log_workout', 'Log a completed exercise set. Pass session_id (from list_exercise_sessions) to attach it to the Google Health session it was part of — Google records no sets/reps/exercise names, this is the only place they live.',
+    { name: z.string(), sets: z.number().optional(), reps: z.number().optional(), weight_kg: z.number().optional(), duration_min: z.number().optional(), exercise_id: z.string().optional(), plan_id: z.number().optional(), session_id: z.string().optional(), notes: z.string().optional(), performed_at: z.string().optional() },
     (a) => db.createWorkout({ ...a, performed_at: a.performed_at || localNow() }))
-  T('update_workout', 'Update fields of a logged workout by id.',
-    { id: z.number(), name: z.string().optional(), sets: z.number().optional(), reps: z.number().optional(), weight_kg: z.number().optional(), duration_min: z.number().optional(), notes: z.string().optional() },
+  T('update_workout', 'Update fields of a logged workout by id. Pass session_id to attach/reattach it to a Google Health exercise session (e.g. once list_exercise_sessions reveals the id after the set was logged), or null to detach it.',
+    { id: z.number(), name: z.string().optional(), sets: z.number().optional(), reps: z.number().optional(), weight_kg: z.number().optional(), duration_min: z.number().optional(), notes: z.string().optional(), session_id: z.string().nullable().optional() },
     ({ id, ...p }) => db.updateWorkout(id, p))
   T('delete_workout', 'Delete a logged workout by id.', { id: z.number() }, ({ id }) => db.deleteWorkout(id))
   T('get_progress', 'Per-exercise strength progress (max weight / est. 1RM over time).', {}, () => progress.computeProgress(db.listWorkouts({})))
+
+  // ===== Google Health exercise sessions (cached in gh_exercise_sessions; sets/reps linked from `workouts`) =====
+  T('list_exercise_sessions', 'Exercise sessions recorded by Google Health (watch/phone) in [from,to), default last 14 days: type, name, times, active minutes, calories, distance, steps, avg HR, HR-zone minutes, pauses. Strength sessions arrive as exercise_type WORKOUT with name = muscle group ("Back", "Chest", "Leg", "Arms", "Shoulders"); Google records NO sets, reps, weights or exercise names — those are the `logged_sets` you log with log_workout passing the session_id. Past days come from the local cache; today (or refresh=true) is fetched live.',
+    { ...range, refresh: z.boolean().describe('force a live refetch of the whole range').optional() },
+    async ({ from, to, refresh }) => {
+      const f = from || shift(today(), -14), t = to || nextDay(today())
+      const sessions = (await sessionsFor(f, t, Boolean(refresh))).map((s) => withSets(fmtSession(s)))
+      return { range: { from: f, to: t }, count: sessions.length, sessions }
+    })
+  T('get_exercise_session', 'Full detail of one cached Google Health exercise session: everything in list_exercise_sessions plus events (START/STOP/PAUSE/RESUME…), laps (splitSummaries), splits, notes, source {platform, recording_method}, raw (the Google Exercise object) and its logged_sets. Not found → run list_exercise_sessions for its date first.',
+    { session_id: z.string() },
+    async ({ session_id }) => {
+      let s = db.getExerciseSession(session_id)
+      if (!s) throw new Error(`session not found in cache: ${session_id}. Run list_exercise_sessions for its date to fetch it.`)
+      // reconcile (what fills the cache) omits dataSource; dataPoints.get has it → fetch once, persist, never again.
+      if (!s.source && googleHealth.fetchExerciseSession) {
+        try { s = { ...s, ...(await googleHealth.fetchExerciseSession(session_id)) }; db.cacheExerciseSessions([s]) } catch { /* ponytail: offline/expired token → cached detail with source null still beats an error */ }
+      }
+      return withSets(s)
+    })
+  T('sync_exercise_sessions', 'Fetch Google Health exercise sessions for [from,to) (default last 30 days) into the local cache. Use to backfill history; list_exercise_sessions refreshes today by itself.',
+    range,
+    async ({ from, to }) => {
+      const f = from || shift(today(), -30), t = to || nextDay(today())
+      // Chunk in 30-day windows and cache each as it lands: exercise pages at 25/session and the
+      // reconcile call throws (with nothing cached) past 100 pages — an unbounded span could burn
+      // that whole budget and write zero rows. A window this size stays well under it, and a bad
+      // window still leaves every earlier window's sessions cached.
+      let fetched = 0, upserted = 0
+      for (let a = f; a < t; a = shift(a, 30)) {
+        const b = shift(a, 30) < t ? shift(a, 30) : t
+        const { sessions } = await googleHealth.fetchExerciseSessions(a, b)
+        fetched += sessions.length
+        upserted += db.cacheExerciseSessions(sessions).upserted
+      }
+      return { range: { from: f, to: t }, fetched, upserted, cache: db.exerciseCacheStats() }
+    })
+  T('export_exercise_tcx', 'Download a Google Health exercise session as a TCX XML file (GPS track + laps + HR samples). Only meaningful when the session has_gps; indoor WORKOUT sessions yield a near-empty file. Check `bytes`/`trackpoints` before consuming `tcx` — a 1Hz-logged hour can be ~1MB of XML.',
+    { session_id: z.string() },
+    async ({ session_id }) => {
+      const tcx = await googleHealth.exportExerciseTcx(session_id)
+      // ponytail: byte/trackpoint counts let the caller decide whether to consume `tcx` at all;
+      // no truncation here since cutting the XML mid-document would make it unparseable.
+      return { session_id, bytes: Buffer.byteLength(tcx), trackpoints: (tcx.match(/<Trackpoint>/g) || []).length, tcx }
+    })
+  T('get_workout_day', '"What did I train on a date": Google Health exercise sessions (compact) each with the sets logged against it, `unattached_sets` (sets logged that day with no session_id), and totals (sessions, active minutes, calories). Defaults to today.',
+    onDate,
+    async ({ date }) => {
+      const dt = date || today()
+      // Sets attach to a session by session_id, not by the day they were logged — a set entered
+      // the next morning still belongs to last night's session. So join via withSets (id-based,
+      // same as list_exercise_sessions) rather than filtering that day's workouts by date.
+      const ws = db.listWorkouts({ from: dt, to: nextDay(dt) })
+      const raw = await sessionsFor(dt, nextDay(dt), false)
+      const sessions = raw.map((s) => withSets(fmtSession(s)))
+      const unattached_sets = ws.filter((w) => !w.session_id).map(fmtSet)
+      const totals = { sessions: sessions.length, active_min: r1(sessions.reduce((a, s) => a + (s.active_min || 0), 0)), calories_kcal: r0(sessions.reduce((a, s) => a + (s.calories_kcal || 0), 0)) }
+      return { date: dt, sessions, unattached_sets, totals }
+    })
+  // Generic escape hatch over every v4 data type. DATA_TYPES comes from the service via googlehealth.cjs;
+  // fall back to a free string so the tool still registers against an older service build.
+  const DT = googleHealth.DATA_TYPES || null
+  const writeOnly = DT ? Object.keys(DT).filter((k) => DT[k].writeOnly) : []
+  T('query_google_health', `Raw Google Health v4 data points for any data type over [from,to) (default last 7 days; catalog types like food ignore dates). Returns { data_type, kind, count, truncated, data_points } untranslated — use the specific tools first, this for anything they don't cover. Kinds: sample/interval/session/daily/catalog. Write-only types cannot be read: ${writeOnly.join(', ') || 'symptoms, moods, menstrual-period, ovulation-test'}.`,
+    { data_type: DT ? z.enum(Object.keys(DT)) : z.string(), ...range, max_pages: z.number().int().min(1).max(100).describe('page cap; truncated=true when hit').optional() },
+    ({ data_type, from, to, max_pages }) => {
+      if (DT?.[data_type]?.writeOnly) throw new Error(`${data_type} is write-only in Google Health (create/update/batchDelete only); it cannot be read.`)
+      return googleHealth.queryDataPoints(data_type, from || shift(today(), -7), to || nextDay(today()), { maxPages: max_pages })
+    })
 
   // ===== Workout plans =====
   T('list_workout_plans', 'Saved workout plans/routines with their exercises.', {}, () => db.listWorkoutPlans())

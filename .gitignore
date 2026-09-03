@@ -3,3 +3,6 @@ dist/
 *.sqlite
 *.db
 .data/
+
+# marketing assets, not part of the server
+media/linkedin/

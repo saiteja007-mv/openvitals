@@ -101,14 +101,38 @@ function initDb(file) {
       calories REAL, protein REAL, carbs REAL, fat REAL,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS gh_daily (
+      date TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (date, endpoint)
+    );
+    CREATE TABLE IF NOT EXISTS gh_exercise_sessions (
+      session_id TEXT PRIMARY KEY,
+      date TEXT NOT NULL, start_time TEXT, end_time TEXT, exercise_type TEXT, name TEXT,
+      active_duration_s REAL, elapsed_s REAL, calories_kcal REAL, distance_m REAL, steps INTEGER,
+      avg_hr_bpm REAL, active_zone_minutes REAL,
+      hr_light_min REAL, hr_moderate_min REAL, hr_vigorous_min REAL, hr_peak_min REAL,
+      pauses INTEGER, has_gps INTEGER, notes TEXT, source_platform TEXT,
+      json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE INDEX IF NOT EXISTS idx_workouts_performed ON workouts(performed_at);
+    CREATE INDEX IF NOT EXISTS idx_gh_exercise_date ON gh_exercise_sessions(date);
     CREATE INDEX IF NOT EXISTS idx_hydration_at ON hydration(at);
     CREATE INDEX IF NOT EXISTS idx_gh_food_date ON gh_food_items(date);
     CREATE INDEX IF NOT EXISTS idx_meals_eaten ON meals(eaten_at);
     CREATE INDEX IF NOT EXISTS idx_habits_date ON habits(date);
     CREATE INDEX IF NOT EXISTS idx_body_metrics_date ON body_metrics(date);
   `)
-  ensureColumn('workouts', 'plan_id', 'INTEGER')
+  // The sqlite file is live and pre-existing: columns added after v1 are ALTERed in, never recreated.
+  ensureColumns('workouts', { plan_id: 'INTEGER', session_id: 'TEXT' })
+  ensureColumns('gh_food_items', {
+    serving_amount: 'REAL', serving_unit: 'TEXT', energy_from_fat: 'REAL', fiber: 'REAL', sugar: 'REAL',
+    sodium: 'REAL', saturated_fat: 'REAL', cholesterol: 'REAL', food_ref: 'TEXT', nutrients_json: 'TEXT',
+  })
+  ensureColumns('gh_nutrition_daily', { saturated_fat: 'REAL', cholesterol: 'REAL', nutrients_json: 'TEXT' })
   db.exec("INSERT OR IGNORE INTO settings (id) VALUES (1)")
   seedMealRecipes()
   seedWorkoutPlans()
@@ -122,13 +146,14 @@ function shiftISO(date, delta) {
   return d.toISOString().slice(0, 10)
 }
 
-function ensureColumn(table, col, decl) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all()
-  if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`)
+// Idempotent ADD COLUMN: sqlite has no IF NOT EXISTS for columns, so check table_info first.
+function ensureColumns(table, cols) {
+  const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name))
+  for (const [col, decl] of Object.entries(cols)) if (!have.has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`)
 }
 
 const COLS = {
-  workouts: ['exercise_id', 'name', 'performed_at', 'sets', 'reps', 'weight_kg', 'duration_min', 'notes', 'plan_id'],
+  workouts: ['exercise_id', 'name', 'performed_at', 'sets', 'reps', 'weight_kg', 'duration_min', 'notes', 'plan_id', 'session_id'],
   meals: ['name', 'meal_type', 'eaten_at', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes'],
   meal_recipes: ['name', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes'],
   reminders: ['kind', 'channel', 'enabled', 'time_of_day', 'target'],
@@ -218,6 +243,13 @@ function remove(table, id) {
   return { deleted: db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id).changes > 0 }
 }
 
+// session_id links a set to a Google Health exercise session (which records no sets/reps itself).
+function listWorkouts(opts) {
+  const { session_id, ...range } = opts || {}
+  const rows = list('workouts', 'performed_at', range)
+  return session_id ? rows.filter((r) => r.session_id === session_id) : rows
+}
+
 function listMeals(opts) {
   const { meal_type, limit, ...range } = opts || {}
   let rows = list('meals', 'eaten_at', range)
@@ -227,17 +259,27 @@ function listMeals(opts) {
 }
 
 // ===== Google Health nutrition cache (daily macro totals + individual food items) =====
-const upsertNutritionDailyStmt = () => db.prepare(`
-  INSERT INTO gh_nutrition_daily (date, calories, protein, carbs, fat, fiber, sugar, sodium, updated_at)
-  VALUES (@date, @calories, @protein, @carbs, @fat, @fiber, @sugar, @sodium, datetime('now'))
-  ON CONFLICT(date) DO UPDATE SET calories=@calories, protein=@protein, carbs=@carbs, fat=@fat,
-    fiber=@fiber, sugar=@sugar, sodium=@sodium, updated_at=datetime('now')`)
-const upsertFoodItemStmt = () => db.prepare(`
-  INSERT INTO gh_food_items (item_key, date, eaten_at, food_name, meal_type, calories, protein, carbs, fat, updated_at)
-  VALUES (@item_key, @date, @eaten_at, @food_name, @meal_type, @calories, @protein, @carbs, @fat, datetime('now'))
-  ON CONFLICT(item_key) DO UPDATE SET date=@date, eaten_at=@eaten_at, food_name=@food_name, meal_type=@meal_type,
-    calories=@calories, protein=@protein, carbs=@carbs, fat=@fat, updated_at=datetime('now')`)
+// Upsert-by-key over a fixed column list; every column is rewritten so a re-sync can null out a
+// value Google dropped instead of leaving the stale one behind.
+const upsertStmt = (table, key, cols) => db.prepare(`
+  INSERT INTO ${table} (${key}, ${cols.join(', ')}, updated_at)
+  VALUES (@${key}, ${cols.map((c) => '@' + c).join(', ')}, datetime('now'))
+  ON CONFLICT(${key}) DO UPDATE SET ${cols.map((c) => `${c}=@${c}`).join(', ')}, updated_at=datetime('now')`)
+const DAILY_NUM = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium', 'saturated_fat', 'cholesterol']
+const ITEM_NUM = ['calories', 'protein', 'carbs', 'fat', 'serving_amount', 'energy_from_fat', 'fiber', 'sugar', 'sodium', 'saturated_fat', 'cholesterol']
+const upsertNutritionDailyStmt = () => upsertStmt('gh_nutrition_daily', 'date', [...DAILY_NUM, 'nutrients_json'])
+const upsertFoodItemStmt = () => upsertStmt('gh_food_items', 'item_key', ['date', 'eaten_at', 'food_name', 'meal_type', 'serving_unit', 'food_ref', ...ITEM_NUM, 'nutrients_json'])
 const nn = (v) => (v == null ? null : Number(v))
+const nums = (obj, keys) => Object.fromEntries(keys.map((k) => [k, nn(obj[k])]))
+// nutrients: {NUTRIENT: grams} — stored as JSON because Google lists 40 possible nutrients and a column each is not worth it.
+const nutrientsJson = (n) => (n && Object.keys(n).length ? JSON.stringify(n) : null)
+function parseNutrients(row) {
+  if (!row) return row
+  const { nutrients_json, ...rest } = row
+  let nutrients = {}
+  try { nutrients = JSON.parse(nutrients_json || '{}') } catch { /* corrupt cell: empty beats throwing on a read */ }
+  return { ...rest, nutrients }
+}
 
 // Bulk-cache a fetchNutrition() result. Returns counts written.
 function cacheNutrition({ daily = [], items = [] } = {}) {
@@ -245,16 +287,106 @@ function cacheNutrition({ daily = [], items = [] } = {}) {
   const iStmt = upsertFoodItemStmt()
   db.exec('BEGIN')
   try {
-    for (const d of daily) dStmt.run({ date: d.date, calories: nn(d.calories), protein: nn(d.protein), carbs: nn(d.carbs), fat: nn(d.fat), fiber: nn(d.fiber), sugar: nn(d.sugar), sodium: nn(d.sodium) })
-    for (const it of items) iStmt.run({ item_key: it.item_key, date: it.date, eaten_at: it.eaten_at || null, food_name: it.food_name || null, meal_type: it.meal_type || null, calories: nn(it.calories), protein: nn(it.protein), carbs: nn(it.carbs), fat: nn(it.fat) })
+    for (const d of daily) dStmt.run({ date: d.date, ...nums(d, DAILY_NUM), nutrients_json: nutrientsJson(d.nutrients) })
+    for (const it of items) iStmt.run({
+      item_key: it.item_key, date: it.date, eaten_at: it.eaten_at || null, food_name: it.food_name || null, meal_type: it.meal_type || null,
+      serving_unit: it.serving_unit || null, food_ref: it.food_ref || null, ...nums(it, ITEM_NUM), nutrients_json: nutrientsJson(it.nutrients),
+    })
     db.exec('COMMIT')
   } catch (e) { db.exec('ROLLBACK'); throw e }
   return { daysWritten: daily.length, itemsWritten: items.length }
 }
-const getNutritionDaily = (date) => db.prepare('SELECT * FROM gh_nutrition_daily WHERE date = ?').get(date) || null
-const listNutritionDaily = (range) => list('gh_nutrition_daily', 'date', range || {})
-const listFoodItems = (range) => list('gh_food_items', 'date', range || {}).sort((a, b) => (a.eaten_at || '').localeCompare(b.eaten_at || ''))
+const getNutritionDaily = (date) => parseNutrients(db.prepare('SELECT * FROM gh_nutrition_daily WHERE date = ?').get(date)) || null
+const listNutritionDaily = (range) => list('gh_nutrition_daily', 'date', range || {}).map(parseNutrients)
+const listFoodItems = (range) => list('gh_food_items', 'date', range || {}).map(parseNutrients).sort((a, b) => (a.eaten_at || '').localeCompare(b.eaten_at || ''))
 const nutritionCacheStats = () => db.prepare('SELECT COUNT(*) days, MIN(date) first, MAX(date) last FROM gh_nutrition_daily').get()
+
+// ===== Google Health exercise session cache =====
+// Indexed columns are the ones worth filtering/summing on; `json` holds the full Session (incl. raw)
+// so a reader never needs a second API call. Sets/reps are NOT here — Google has none; they live in
+// `workouts` and link back via workouts.session_id.
+const SESSION_COLS = ['date', 'start_time', 'end_time', 'exercise_type', 'name', 'active_duration_s', 'elapsed_s', 'calories_kcal',
+  'distance_m', 'steps', 'avg_hr_bpm', 'active_zone_minutes', 'hr_light_min', 'hr_moderate_min', 'hr_vigorous_min', 'hr_peak_min',
+  'pauses', 'has_gps', 'notes', 'source_platform', 'json']
+function cacheExerciseSessions(sessions = []) {
+  const stmt = upsertStmt('gh_exercise_sessions', 'session_id', SESSION_COLS)
+  db.exec('BEGIN')
+  try {
+    for (const s of sessions) {
+      const z = s.hr_zones_min || {}
+      stmt.run({
+        session_id: s.session_id, date: s.date, start_time: s.start_time || null, end_time: s.end_time || null,
+        exercise_type: s.exercise_type || null, name: s.name || null,
+        ...nums(s, ['active_duration_s', 'elapsed_s', 'calories_kcal', 'distance_m', 'steps', 'avg_hr_bpm', 'active_zone_minutes', 'pauses']),
+        hr_light_min: nn(z.light), hr_moderate_min: nn(z.moderate), hr_vigorous_min: nn(z.vigorous), hr_peak_min: nn(z.peak),
+        has_gps: s.has_gps == null ? null : s.has_gps ? 1 : 0, notes: s.notes || null, source_platform: s.source?.platform || null,
+        json: JSON.stringify(s),
+      })
+    }
+    db.exec('COMMIT')
+  } catch (e) { db.exec('ROLLBACK'); throw e }
+  return { upserted: sessions.length }
+}
+// Parsed json wins over the columns: it's the same Session the columns were derived from, plus raw/events/laps.
+function parseSession(row) {
+  if (!row) return null
+  const { json, ...cols } = row
+  try { return { ...cols, ...JSON.parse(json) } } catch { return cols }
+}
+const listExerciseSessions = (range) => list('gh_exercise_sessions', 'date', range || {}).map(parseSession)
+  .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
+const getExerciseSession = (sessionId) => parseSession(db.prepare('SELECT * FROM gh_exercise_sessions WHERE session_id = ?').get(sessionId))
+const exerciseCacheStats = () => db.prepare('SELECT COUNT(*) sessions, MIN(date) first, MAX(date) last FROM gh_exercise_sessions').get()
+
+// ===== Google Health daily cache =====
+// One row per (date, endpoint) holding that endpoint's raw JSON. Deliberately schema-less:
+// Google adds and renames endpoints, and a generic store means a new one is cached the day it
+// appears instead of silently dropped until someone writes a migration.
+const upsertDailyStmt = () => db.prepare(`
+  INSERT INTO gh_daily (date, endpoint, json, updated_at)
+  VALUES (@date, @endpoint, @json, datetime('now'))
+  ON CONFLICT(date, endpoint) DO UPDATE SET json=@json, updated_at=datetime('now')`)
+
+// Cache one day's endpoint map. Returns { date, endpointsWritten, bytes }.
+function cacheDailyHealth(date, endpoints = {}) {
+  const stmt = upsertDailyStmt()
+  let bytes = 0
+  db.exec('BEGIN')
+  try {
+    for (const [endpoint, value] of Object.entries(endpoints)) {
+      if (value == null) continue
+      const json = JSON.stringify(value)
+      bytes += json.length
+      stmt.run({ date, endpoint, json })
+    }
+    db.exec('COMMIT')
+  } catch (e) { db.exec('ROLLBACK'); throw e }
+  return { date, endpointsWritten: Object.keys(endpoints).length, bytes }
+}
+
+// Rebuild a cached day into the same shape a live pull returns, so callers can't tell them apart.
+function getDailyHealth(date) {
+  const rows = db.prepare('SELECT endpoint, json, updated_at FROM gh_daily WHERE date = ?').all(date)
+  if (!rows.length) return null
+  const endpoints = {}
+  for (const r of rows) {
+    try { endpoints[r.endpoint] = JSON.parse(r.json) } catch { /* skip a corrupt row rather than lose the day */ }
+  }
+  return { source: 'google-health', date, cached: true, cachedAt: rows[0].updated_at, endpoints }
+}
+
+function getDailyEndpoint(date, endpoint) {
+  const row = db.prepare('SELECT json FROM gh_daily WHERE date = ? AND endpoint = ?').get(date, endpoint)
+  if (!row) return null
+  try { return JSON.parse(row.json) } catch { return null }
+}
+
+const listCachedHealthDates = (range) =>
+  db.prepare(`SELECT DISTINCT date FROM gh_daily${range?.from ? ' WHERE date >= @from AND date < @to' : ''} ORDER BY date`)
+    .all(range?.from ? { from: range.from, to: range.to } : {}).map((r) => r.date)
+
+const healthCacheStats = () => db.prepare(
+  'SELECT COUNT(DISTINCT date) days, MIN(date) first, MAX(date) last, COUNT(*) rows, SUM(LENGTH(json)) bytes FROM gh_daily').get()
 
 function duplicateMeals(fromDate, toDate) {
   const rows = db.prepare('SELECT * FROM meals WHERE substr(eaten_at, 1, 10) = ?').all(fromDate)
@@ -449,7 +581,7 @@ function importAll(data) {
 module.exports = {
   initDb,
   createWorkout: (w) => insert('workouts', w),
-  listWorkouts: (f) => list('workouts', 'performed_at', f),
+  listWorkouts,
   updateWorkout: (id, p) => update('workouts', id, p),
   deleteWorkout: (id) => remove('workouts', id),
   createMeal: (m) => insert('meals', m),
@@ -459,6 +591,15 @@ module.exports = {
   listNutritionDaily,
   listFoodItems,
   nutritionCacheStats,
+  cacheExerciseSessions,
+  listExerciseSessions,
+  getExerciseSession,
+  exerciseCacheStats,
+  cacheDailyHealth,
+  getDailyHealth,
+  getDailyEndpoint,
+  listCachedHealthDates,
+  healthCacheStats,
   updateMeal: (id, p) => update('meals', id, p),
   deleteMeal: (id) => remove('meals', id),
   duplicateMeals,

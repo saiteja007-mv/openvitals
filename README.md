@@ -36,7 +36,7 @@ You own the Google Cloud project, you hold the OAuth secrets, your data never le
 - 🩺 **~60 MCP tools** over your real Google Health data — heart, sleep, activity, glucose, SpO₂, temperature, ECG, body composition
 - 🍎 **Nutrition & workouts** — log meals, search foods, barcode lookup, recipes, workout plans, exercise search
 - 📈 **Insights** — daily/weekly summaries, progress, recommendations, plan-vs-logged comparison
-- 🔒 **Read-only** Google scopes; every secret stays local and gitignored
+- 🔒 **Read-only** Google scopes; every secret stays local and gitignored (the v4 API itself *does* support writes under separate `*.writeonly` scopes — see below)
 - 🏠 **Runs anywhere** always-on — an old laptop, a Raspberry Pi, a mini-PC
 - 🔌 **Any MCP client** — local (Claude Code, Cursor) or cloud (ChatGPT, Claude apps) via a tunnel
 
@@ -236,15 +236,28 @@ Then just ask: *"summarize my sleep this week"*, *"what's my resting heart rate 
 
 ---
 
-## 🛠 Tools (~60)
+## 🛠 Tools (~70)
 
 | Group | Examples |
 |---|---|
 | **Google Health** | `get_heart` · `get_sleep` · `get_activity` · `get_glucose` · `get_spo2` · `get_temperature` · `get_breathing` · `get_body_composition` · `sync_google_health` |
 | **Summaries** | `get_daily_summary` · `get_weekly_summary` · `get_progress` · `get_recommendation` · `compare_plan_vs_logged` |
-| **Nutrition** | `log_meal` · `search_food` · `lookup_barcode` · `get_nutrition_intake` · meal recipes |
-| **Workouts** | `log_workout` · `search_exercises` · workout plans |
+| **Exercise sessions** | `list_exercise_sessions` · `get_exercise_session` · `sync_exercise_sessions` · `export_exercise_tcx` · `get_workout_day` |
+| **Raw Google Health escape hatch** | `query_google_health` — any of the 42 data types Google Health v4 exposes, by name |
+| **Nutrition** | `log_meal` · `search_food` · `lookup_barcode` · `get_nutrition_intake` · `get_food_log` · meal recipes |
+| **Workouts** | `log_workout` (optional `session_id` to attach to a Google Health session) · `search_exercises` · workout plans |
 | **Body & habits** | `upsert_body_metric` · `list_body_metrics` · habits · reminders · hydration |
+
+See [`docs/google-health-api-v4.md`](docs/google-health-api-v4.md) for the full Google Health v4 API
+reference this server is built against (all 27 methods, all 42 data types, filter grammar, roadmap).
+
+### What Google Health does and does not record
+
+Google Health's `Exercise` schema has **no exercise names, sets, reps, or weights**. A strength workout
+arrives as `exerciseType: "WORKOUT"` with `displayName` set to the muscle group — `"Back"`, `"Chest"`,
+`"Leg"`, `"Arms"`, `"Shoulders"` — plus heart rate, calories, and HR-zone minutes for the session as a
+whole. If you want your actual sets logged, use `log_workout` and pass the `session_id` from
+`list_exercise_sessions` to attach them — that's the only place sets/reps/exercise names live.
 
 ---
 
@@ -268,7 +281,9 @@ All optional — sensible defaults are auto-generated on first run.
 ## 🔒 Security
 
 - Everything sensitive is **gitignored** — `.data/` (DB, tokens, password, TLS) is never committed.
-- Google scopes are **read-only**.
+- Google scopes are **read-only** — this server never requests a `*.writeonly` scope. (The Google Health v4
+  API itself has `create`/`patch`/`batchDelete` endpoints for most data types, gated behind those separate
+  writeonly scopes; OpenVitals just doesn't ask for them. See [`docs/google-health-api-v4.md`](docs/google-health-api-v4.md).)
 - On a public URL, the bearer token is the only thing guarding your data — keep it secret, prefer a tunnel over opening a router port, and rotate it by deleting `.data/mcp-token.txt` and restarting.
 
 ## 📄 License
