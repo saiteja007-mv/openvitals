@@ -288,6 +288,49 @@ export function buildServer(d) {
       return googleHealth.queryDataPoints(data_type, from || shift(today(), -7), to || nextDay(today()), { maxPages: max_pages })
     })
 
+  // ===== Google Health writes (nutrition-log, hydration-log, weight — the *.writeonly scopes) =====
+  // Live-tested facts callers must know (see WRITE-SPEC.md fact 3): Google does NOT deduplicate —
+  // every log_*_to_google_health call creates a brand-new entry, even with identical content
+  // back-to-back, so never call one twice for the same thing. And a client can't choose the created
+  // id — Google always assigns its own; the `name` a call returns is the only handle you get, keep
+  // it if you might need delete_google_health_entry. (Session-interval synthesis for nutrition/
+  // hydration is handled inside the write path itself — nothing callers need to think about.)
+  T('log_meal_to_google_health', 'Writes a food entry to your REAL Google Health / Fitbit account — NOT the local `meals` table (use log_meal for that). Google does not deduplicate: calling this twice for the same meal logs it twice, and an error/timeout here may still mean the write landed server-side — check with query_google_health before retrying rather than assuming it failed. Undo with delete_google_health_entry({ name }) using the returned name.',
+    {
+      at: z.string().describe('ISO datetime; default now').optional(),
+      food_name: z.string(), meal_type: z.string(), calories: z.number(), carbs_g: z.number(), fat_g: z.number(),
+      protein_g: z.number().optional(), fiber_g: z.number().optional(), sugar_g: z.number().optional(),
+      sodium_mg: z.number().optional(), saturated_fat_g: z.number().optional(), cholesterol_mg: z.number().optional(),
+      serving_amount: z.number().optional(), serving_unit: z.string().optional(),
+    },
+    async (a) => {
+      const at = a.at || localNow()
+      const { name } = await googleHealth.writeMeal({
+        startTime: at, foodDisplayName: a.food_name, mealType: a.meal_type,
+        servingAmount: a.serving_amount, servingUnit: a.serving_unit,
+        calories: a.calories, carbsG: a.carbs_g, fatG: a.fat_g, proteinG: a.protein_g,
+        fiberG: a.fiber_g, sugarG: a.sugar_g, sodiumMg: a.sodium_mg,
+        saturatedFatG: a.saturated_fat_g, cholesterolMg: a.cholesterol_mg,
+      })
+      return { name, logged: { at, food_name: a.food_name, meal_type: a.meal_type, calories: a.calories, carbs_g: a.carbs_g, fat_g: a.fat_g } }
+    })
+  T('log_water_to_google_health', 'Writes a hydration entry to your REAL Google Health / Fitbit account — NOT the local hydration log (use log_hydration for that). Google does not deduplicate: calling this twice logs water twice, and an error/timeout here may still mean the write landed server-side — check with query_google_health before retrying rather than assuming it failed. Undo with delete_google_health_entry({ name }) using the returned name.',
+    { at: z.string().describe('ISO datetime; default now').optional(), milliliters: z.number() },
+    async ({ at, milliliters }) => {
+      const t = at || localNow()
+      const { name } = await googleHealth.writeHydration({ startTime: t, milliliters })
+      return { name, logged: { at: t, milliliters } }
+    })
+  T('log_weight_to_google_health', 'Writes a body-weight entry to your REAL Google Health / Fitbit account — NOT the local body-metrics table (use upsert_body_metric for that). Converts weight_kg to grams for the API. Google does not deduplicate: calling this twice logs weight twice, and an error/timeout here may still mean the write landed server-side — check with query_google_health before retrying rather than assuming it failed. Undo with delete_google_health_entry({ name }) using the returned name.',
+    { at: z.string().describe('ISO datetime; default now').optional(), weight_kg: z.number(), notes: z.string().optional() },
+    async ({ at, weight_kg, notes }) => {
+      const t = at || localNow()
+      const { name } = await googleHealth.writeWeight({ physicalTime: t, weightGrams: Math.round(weight_kg * 1000), notes })
+      return { name, logged: { at: t, weight_kg, notes: notes ?? null } }
+    })
+  T('delete_google_health_entry', 'Delete an entry previously written by log_meal_to_google_health / log_water_to_google_health / log_weight_to_google_health. `name` is the value that call returned.',
+    { name: z.string() }, ({ name }) => googleHealth.deleteGoogleHealthEntry(name))
+
   // ===== Workout plans =====
   T('list_workout_plans', 'Saved workout plans/routines with their exercises.', {}, () => db.listWorkoutPlans())
   T('create_workout_plan', 'Create a workout plan/routine.',

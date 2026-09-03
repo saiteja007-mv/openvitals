@@ -152,6 +152,23 @@ async function queryDataPoints(type, from, to, opts) {
   const creds = await validToken(getCreds(), loadConfig())
   return googleHealth.queryDataPoints(creds.token.access_token, type, from, to, opts)
 }
+// ===== write path: creates a real entry in the user's Google Health account, no dedupe =====
+async function writeMeal(params) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.createNutritionLog(creds.token.access_token, params)
+}
+async function writeHydration(params) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.createHydrationLog(creds.token.access_token, params)
+}
+async function writeWeight(params) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.createWeight(creds.token.access_token, params)
+}
+async function deleteGoogleHealthEntry(name) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.deleteDataPoint(creds.token.access_token, name)
+}
 async function getStatus() {
   const creds = getCreds()
   let configured = false
@@ -162,6 +179,7 @@ async function getStatus() {
 module.exports = {
   getHealth, sync, getStatus, fetchNutrition, backfill,
   fetchExerciseSessions, fetchExerciseSession, exportExerciseTcx, queryDataPoints,
+  writeMeal, writeHydration, writeWeight, deleteGoogleHealthEntry,
   DATA_TYPES: googleHealth.DATA_TYPES,
   cacheStats: () => db().healthCacheStats(),
   cachedDates: (range) => db().listCachedHealthDates(range),

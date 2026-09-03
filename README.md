@@ -244,6 +244,7 @@ Then just ask: *"summarize my sleep this week"*, *"what's my resting heart rate 
 | **Summaries** | `get_daily_summary` · `get_weekly_summary` · `get_progress` · `get_recommendation` · `compare_plan_vs_logged` |
 | **Exercise sessions** | `list_exercise_sessions` · `get_exercise_session` · `sync_exercise_sessions` · `export_exercise_tcx` · `get_workout_day` |
 | **Raw Google Health escape hatch** | `query_google_health` — any of the 42 data types Google Health v4 exposes, by name |
+| **Google Health writes** | `log_meal_to_google_health` — writes a food entry to your real Google Health/Fitbit account, no dedupe · `log_water_to_google_health` — writes a hydration entry to your real account, no dedupe · `log_weight_to_google_health` — writes a body-weight entry to your real account, no dedupe · `delete_google_health_entry` — undoes any of the three by the `name` they returned |
 | **Nutrition** | `log_meal` · `search_food` · `lookup_barcode` · `get_nutrition_intake` · `get_food_log` · meal recipes |
 | **Workouts** | `log_workout` (optional `session_id` to attach to a Google Health session) · `search_exercises` · workout plans |
 | **Body & habits** | `upsert_body_metric` · `list_body_metrics` · habits · reminders · hydration |

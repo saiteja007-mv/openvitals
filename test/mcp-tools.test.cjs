@@ -28,7 +28,7 @@ const DATA_TYPES = {
 }
 
 function fakes() {
-  const calls = { fetch: [], query: [], get: [], cached: [] }
+  const calls = { fetch: [], query: [], get: [], cached: [], writeMeal: [], writeHydration: [], writeWeight: [], delete: [] }
   const inRange = (d, { from, to }) => (!from || d >= from) && (!to || d < to)
   const db = {
     listExerciseSessions: (r) => SESSIONS.filter((s) => inRange(s.date, r || {})),
@@ -48,6 +48,10 @@ function fakes() {
     fetchExerciseSession: async (id) => { calls.get.push(id); return { session_id: id, source: { platform: 'FITBIT', recording_method: 'ACTIVELY_MEASURED' } } },
     exportExerciseTcx: async () => '<TrainingCenterDatabase/>',
     queryDataPoints: async (t, from, to, o) => { calls.query.push([t, from, to, o]); return { data_type: t, kind: 'sample', count: 0, truncated: false, data_points: [] } },
+    writeMeal: async (p) => { calls.writeMeal.push(p); return { name: 'users/me/dataTypes/nutrition-log/dataPoints/meal-1', raw: {} } },
+    writeHydration: async (p) => { calls.writeHydration.push(p); return { name: 'users/me/dataTypes/hydration-log/dataPoints/water-1', raw: {} } },
+    writeWeight: async (p) => { calls.writeWeight.push(p); return { name: 'users/me/dataTypes/weight/dataPoints/weight-1', raw: {} } },
+    deleteGoogleHealthEntry: async (name) => { calls.delete.push(name); return { deleted: true, name } },
   }
   return { db, googleHealth, calls }
 }
@@ -179,5 +183,39 @@ test('query_google_health: enum from DATA_TYPES, write-only rejected, defaults f
     assert.deepEqual(f.calls.query, [['heart-rate', '2026-08-01', '2026-08-02', { maxPages: 3 }]])
     const unknown = await call('query_google_health', { data_type: 'not-a-type' })
     assert.match(unknown.error, /invalid|expected|not-a-type/i)
+  } finally { await close() }
+})
+
+test('log_*_to_google_health: correctly shaped writes, mg passed through untouched, kg→g conversion, at defaults to now', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const meal = await call('log_meal_to_google_health', {
+      at: '2026-09-01T08:00:00', food_name: 'Oats', meal_type: 'BREAKFAST', calories: 300, carbs_g: 50, fat_g: 5,
+      protein_g: 10, fiber_g: 8, sugar_g: 1, sodium_mg: 140, saturated_fat_g: 1, cholesterol_mg: 370,
+      serving_amount: 1, serving_unit: 'cup',
+    })
+    assert.equal(meal.name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1')
+    assert.deepEqual(f.calls.writeMeal, [{
+      startTime: '2026-09-01T08:00:00', foodDisplayName: 'Oats', mealType: 'BREAKFAST',
+      servingAmount: 1, servingUnit: 'cup', calories: 300, carbsG: 50, fatG: 5, proteinG: 10,
+      fiberG: 8, sugarG: 1, sodiumMg: 140, saturatedFatG: 1, cholesterolMg: 370,
+    }], 'mg fields pass through untouched — the service layer converts to grams')
+    assert.deepEqual(meal.logged, { at: '2026-09-01T08:00:00', food_name: 'Oats', meal_type: 'BREAKFAST', calories: 300, carbs_g: 50, fat_g: 5 })
+
+    const water = await call('log_water_to_google_health', { at: '2026-09-01T09:00:00', milliliters: 250 })
+    assert.equal(water.name, 'users/me/dataTypes/hydration-log/dataPoints/water-1')
+    assert.deepEqual(f.calls.writeHydration, [{ startTime: '2026-09-01T09:00:00', milliliters: 250 }])
+    // no `at` → defaults to local now, not left undefined
+    await call('log_water_to_google_health', { milliliters: 500 })
+    assert.match(f.calls.writeHydration[1].startTime, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
+
+    const weight = await call('log_weight_to_google_health', { at: '2026-09-01T07:00:00', weight_kg: 70.5, notes: 'am' })
+    assert.equal(weight.name, 'users/me/dataTypes/weight/dataPoints/weight-1')
+    assert.deepEqual(f.calls.writeWeight, [{ physicalTime: '2026-09-01T07:00:00', weightGrams: 70500, notes: 'am' }])
+    assert.deepEqual(weight.logged, { at: '2026-09-01T07:00:00', weight_kg: 70.5, notes: 'am' })
+
+    const del = await call('delete_google_health_entry', { name: meal.name })
+    assert.deepEqual(del, { deleted: true, name: meal.name })
+    assert.deepEqual(f.calls.delete, [meal.name])
   } finally { await close() }
 })

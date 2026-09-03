@@ -2,6 +2,19 @@
 
 All notable changes to OpenVitals (health-mcp). Dates are the day the work landed on `main`.
 
+## [0.3.0] — 2026-09-03
+
+### Added
+- **Google Health write path.** `log_meal_to_google_health`, `log_water_to_google_health`,
+  `log_weight_to_google_health` write nutrition-log/hydration-log/weight data points to the user's real
+  Google Health/Fitbit account under the new `.writeonly` scopes; `delete_google_health_entry` undoes any
+  of the three by the `name` the write returned. Anonymous-food mode only (no Food catalog reference yet);
+  exercise-session writes are out of scope.
+- **Not deduplicated — by design of the API, not this server.** Live testing against the real API proved
+  Google assigns its own id on every create (a client-supplied `name` is silently ignored) and never
+  rejects a repeat: calling one of the log tools twice for the same entry creates two entries, with no
+  error and no server-side idempotency to catch it. Callers must not retry blindly.
+
 ## [0.2.0] — 2026-09-02
 
 ### Added

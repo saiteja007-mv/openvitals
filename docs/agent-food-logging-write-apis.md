@@ -186,11 +186,6 @@ in-app disclosure statement in the recommended form "{App name} collects health 
 
 ## 8. Unverified (carried over verbatim from researchers — do not treat as settled)
 
-- Whether `dataPoints.create` actually accepts/honors a client-supplied `name` for nutrition-log /
-  hydration-log / weight — no official example demonstrates it.
-- Exact behavior on POST create with a duplicate client-provided name (409 ALREADY_EXISTS? silent
-  overwrite? unsupported?) — not in the official Error Catalog, not demonstrated anywhere. Do not design
-  dedupe logic around an assumption; test live first.
 - Whether API writes actually render inside the Fitbit app / Google Health app UI — only indirectly implied
   by the "Reconciled Stream" description on `/health/about` and a secondhand press report (9to5google,
   2026-05-27) of a roadmap bug-fix item; no first-party statement confirms this for write-created data.
@@ -221,3 +216,16 @@ in-app disclosure statement in the recommended form "{App name} collects health 
   2026 community thread, not independently confirmed).
 - Exercise/symptoms/moods data types were not researched in this pass beyond what disc.json's scope list
   implies — flag for a follow-up if health-mcp wants those.
+
+## 9. Settled by live testing (2026-09-02)
+
+A live write+delete round-trip against the real Google Health API this session (not a doc read, an actual
+`dataPoints.create`/`batchDelete` call) settled two items that §8 previously carried as unverified:
+
+- **Client-supplied `name` on create is silently ignored.** Two `dataPoints.create` calls with an identical
+  requested `name` (`.../dataPoints/smoke-test-<x>`) both returned 200 — Google assigned its own distinct
+  numeric ids (`2512638953894064636`, `5481613234006627117`) each time. No error, no collision.
+- **There is no server-side dedupe/idempotency.** Repeating an otherwise-identical create call (same
+  content, same or different `name`) creates a brand-new entry every time — no 409, no silent overwrite,
+  no "already exists" behavior of any kind. `log_meal_to_google_health` / `log_water_to_google_health` /
+  `log_weight_to_google_health` document this plainly: calling one twice for the same thing logs it twice.

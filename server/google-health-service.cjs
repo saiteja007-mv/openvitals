@@ -18,6 +18,11 @@ const SCOPES = [
   'https://www.googleapis.com/auth/googlehealth.irn.readonly',
   'https://www.googleapis.com/auth/googlehealth.location.readonly',
   'https://www.googleapis.com/auth/googlehealth.settings.readonly',
+  // Write scopes (2026-09-02): the v4 API supports dataPoints.create/patch/batchDelete. nutrition.writeonly
+  // covers nutrition-log AND hydration-log; health_metrics_and_measurements.writeonly covers weight.
+  // Any scope change needs a fresh consent: node server/login-gh.cjs
+  'https://www.googleapis.com/auth/googlehealth.nutrition.writeonly',
+  'https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly',
 ]
 
 let nextApiRequestAt = 0
@@ -855,6 +860,110 @@ async function fetchNutritionLog(accessToken, from, to) {
   return { daily, items }
 }
 
+// ===== write path (2026-09-02): create/delete only, anonymous-food mode. See WRITE-SPEC.md. =====
+// No server-side idempotency (fact 3): every call below creates a brand-new entry — callers
+// must not retry a write_* call assuming Google will dedupe it.
+
+// create/patch/batchDelete all return a long-running Operation, not the bare DataPoint (fact 2).
+// The new entry's id is at op.response.name, not op.name — losing this unwrap loses the id
+// needed to ever delete/reference the entry.
+function unwrapOperation(op) {
+  const dp = op?.response
+  if (!dp?.name) throw new Error('Google Health did not return a data point name for this write.')
+  return { name: dp.name, raw: dp }
+}
+
+// SessionTimeInterval for nutrition-log/hydration-log: strictly start < end (fact 4) or Google
+// 400s with INVALID_TIME_RANGE. Caller passes one `startTime`; `endTime` is synthesized as
+// startTime+60s when omitted, matching fact 4's minimal fix for a one-shot "log this now".
+function sessionInterval(startTime, endTime) {
+  if (!startTime) throw new Error('startTime is required.')
+  const start = new Date(startTime)
+  if (Number.isNaN(start.getTime())) throw new Error(`Invalid startTime "${startTime}".`)
+  let end = endTime ? new Date(endTime) : null
+  if (end && Number.isNaN(end.getTime())) throw new Error(`Invalid endTime "${endTime}".`)
+  if (end && end <= start) throw new Error('endTime must be after startTime.')
+  if (!end) end = new Date(start.getTime() + 60_000)
+  return { startTime: start.toISOString(), endTime: end.toISOString() }
+}
+
+// Anonymous-food nutrition-log create (fact 8). Identified-food mode (referencing a Food
+// catalog entry) is out of scope — health-mcp has no food-catalog search tool yet.
+async function createNutritionLog(accessToken, {
+  startTime, endTime, foodDisplayName, mealType, servingAmount, servingUnit,
+  calories, carbsG, fatG, proteinG, fiberG, sugarG, sodiumMg, saturatedFatG, cholesterolMg,
+} = {}) {
+  const interval = sessionInterval(startTime, endTime)
+  const nutrients = []
+  // sodium/cholesterol arrive as mg (matching the existing _mg convention); the wire nutrient
+  // quantity only has a grams field (no milligrams), so convert here.
+  const add = (nutrient, grams) => { if (grams !== undefined && grams !== null) nutrients.push({ nutrient, quantity: { grams } }) }
+  add('PROTEIN', proteinG)
+  add('DIETARY_FIBER', fiberG)
+  add('SUGAR', sugarG)
+  add('SODIUM', sodiumMg == null ? sodiumMg : sodiumMg / 1000)
+  add('SATURATED_FAT', saturatedFatG)
+  add('CHOLESTEROL', cholesterolMg == null ? cholesterolMg : cholesterolMg / 1000)
+  // DataPoint is a union — the fields must nest under the type's own key (`nutritionLog`), never
+  // sit at the body root, or Google 400s every field as "Unknown name … at 'data_point'".
+  const body = {
+    nutritionLog: {
+      interval,
+      foodDisplayName,
+      mealType,
+      // foodMeasurementUnitDisplayName is readOnly/"Output only" per disc.json — writing there is
+      // silently dropped. foodMeasurementUnit is the documented writable field (untested live; fact 8's
+      // minimal set didn't exercise a unit, ship it best-effort rather than the field proven inert).
+      serving: { amount: servingAmount, ...(servingUnit ? { foodMeasurementUnit: servingUnit } : {}) },
+      energy: { kcal: calories },
+      totalCarbohydrate: { grams: carbsG },
+      totalFat: { grams: fatG },
+      nutrients,
+    },
+  }
+  // never send dataSource — omitting it lets Google default recordingMethod to UNKNOWN (fact 6)
+  const op = await request('/users/me/dataTypes/nutrition-log/dataPoints', accessToken, { method: 'POST', body })
+  return unwrapOperation(op)
+}
+
+async function createHydrationLog(accessToken, { startTime, endTime, milliliters } = {}) {
+  const interval = sessionInterval(startTime, endTime)
+  const op = await request('/users/me/dataTypes/hydration-log/dataPoints', accessToken, {
+    method: 'POST',
+    body: { hydrationLog: { interval, amountConsumed: { milliliters } } },
+  })
+  return unwrapOperation(op)
+}
+
+// weight uses ObservationSampleTime (a point, not an interval) — fact 5.
+async function createWeight(accessToken, { physicalTime, weightGrams, notes } = {}) {
+  if (!physicalTime) throw new Error('physicalTime is required.')
+  const time = new Date(physicalTime)
+  if (Number.isNaN(time.getTime())) throw new Error(`Invalid physicalTime "${physicalTime}".`)
+  const op = await request('/users/me/dataTypes/weight/dataPoints', accessToken, {
+    method: 'POST',
+    body: { weight: { sampleTime: { physicalTime: time.toISOString() }, weightGrams, ...(notes ? { notes } : {}) } },
+  })
+  return unwrapOperation(op)
+}
+
+// Undo for any of the three write types — one function, the type comes out of `name` itself
+// (the segment after dataTypes/ and before /dataPoints/). Allowlisted to the types this write
+// surface actually creates — health_metrics_and_measurements.writeonly likely covers the whole
+// sample/reconcile family (heart-rate, weight, body-fat, ...), so without this a `name` copied
+// from a read tool (e.g. get_heart) could batchDelete real device-synced data this tool never wrote.
+const DELETABLE_TYPES = ['nutrition-log', 'hydration-log', 'weight']
+async function deleteDataPoint(accessToken, name) {
+  const match = /dataTypes\/([^/]+)\/dataPoints\//.exec(name || '')
+  if (!match) throw new Error(`Cannot parse a Google Health data type out of "${name}".`)
+  if (!DELETABLE_TYPES.includes(match[1])) throw new Error(`Refusing to delete data type "${match[1]}" — only ${DELETABLE_TYPES.join(', ')} can be deleted through this tool.`)
+  await request(`/users/me/dataTypes/${match[1]}/dataPoints:batchDelete`, accessToken, {
+    method: 'POST',
+    body: { names: [name] },
+  })
+  return { deleted: true, name }
+}
+
 module.exports = {
   provider: 'google-health',
   scopes: SCOPES,
@@ -870,5 +979,9 @@ module.exports = {
   fetchExerciseSession,
   exportExerciseTcx,
   queryDataPoints,
+  createNutritionLog,
+  createHydrationLog,
+  createWeight,
+  deleteDataPoint,
   __test: { translateGoogleHealth, dateFromCivil, durationSeconds, dataFilter, toSession },
 }

@@ -345,3 +345,149 @@ test('googlehealth.cjs wrappers pass a valid token through and re-export DATA_TY
   ])
   assert.equal(gh.DATA_TYPES.exercise.kind, 'session')
 })
+
+// ===== write path: createNutritionLog / createHydrationLog / createWeight / deleteDataPoint =====
+
+// Operation-wrapper shape proven live (fact 2): the created name is at body.response.name.
+function operationOf(dataPoint) { return { done: true, response: dataPoint } }
+
+test('createNutritionLog unwraps the Operation, synthesizes a 60s interval from a single startTime, and converts mg nutrients to grams', async () => {
+  await withFetch((url, init) => {
+    assert.equal(new URL(url).pathname, '/v4/users/me/dataTypes/nutrition-log/dataPoints')
+    assert.equal(init.method, 'POST')
+    const body = JSON.parse(init.body)
+    assert.equal(body.interval, undefined, 'fields must nest under nutritionLog, never sit at the body root')
+    const nl = body.nutritionLog
+    assert.deepEqual(nl.interval, { startTime: '2026-09-01T12:00:00.000Z', endTime: '2026-09-01T12:01:00.000Z' })
+    assert.equal(nl.foodDisplayName, 'Banana')
+    assert.equal(nl.mealType, 'SNACK')
+    assert.equal(nl.serving.amount, 1)
+    assert.equal(nl.energy.kcal, 105)
+    assert.equal(nl.totalCarbohydrate.grams, 27)
+    assert.equal(nl.totalFat.grams, 0.4)
+    assert.equal(body.dataSource, undefined, 'never send dataSource — let Google default to UNKNOWN')
+    const bySodium = nl.nutrients.find((n) => n.nutrient === 'SODIUM')
+    assert.equal(bySodium.quantity.grams, 0.001, '1mg sodium -> 0.001g')
+    assert.equal(nl.nutrients.find((n) => n.nutrient === 'PROTEIN').quantity.grams, 1.3)
+    assert.equal(nl.nutrients.find((n) => n.nutrient === 'DIETARY_FIBER'), undefined, 'omitted params produce no nutrient entry')
+    return operationOf({ name: 'users/me/dataTypes/nutrition-log/dataPoints/123', nutritionLog: { foodDisplayName: 'Banana' } })
+  }, async () => {
+    const out = await svc.createNutritionLog('tok', {
+      startTime: '2026-09-01T12:00:00Z', foodDisplayName: 'Banana', mealType: 'SNACK',
+      servingAmount: 1, calories: 105, carbsG: 27, fatG: 0.4, proteinG: 1.3, sodiumMg: 1,
+    })
+    assert.equal(out.name, 'users/me/dataTypes/nutrition-log/dataPoints/123')
+    assert.equal(out.raw.nutritionLog.foodDisplayName, 'Banana')
+  })
+})
+
+test('createNutritionLog writes serving_unit to the writable foodMeasurementUnit field, not the readOnly display-name field', async () => {
+  await withFetch((url, init) => {
+    const body = JSON.parse(init.body).nutritionLog
+    assert.equal(body.serving.foodMeasurementUnit, 'cup')
+    assert.equal(body.serving.foodMeasurementUnitDisplayName, undefined, 'that field is readOnly/Output-only on write — never send it')
+    return operationOf({ name: 'users/me/dataTypes/nutrition-log/dataPoints/999', nutritionLog: {} })
+  }, async () => {
+    await svc.createNutritionLog('tok', {
+      startTime: '2026-09-01T12:00:00Z', foodDisplayName: 'Oats', mealType: 'BREAKFAST',
+      servingAmount: 1, servingUnit: 'cup', calories: 1, carbsG: 1, fatG: 1,
+    })
+  })
+})
+
+test('createNutritionLog rejects an explicit endTime <= startTime instead of sending a zero-width interval', async () => {
+  await withFetch(() => { throw new Error('must not fetch') }, async () => {
+    await assert.rejects(() => svc.createNutritionLog('tok', {
+      startTime: '2026-09-01T12:00:00Z', endTime: '2026-09-01T12:00:00Z',
+      foodDisplayName: 'X', mealType: 'SNACK', servingAmount: 1, calories: 1, carbsG: 1, fatG: 1,
+    }), /endTime must be after startTime/)
+  })
+})
+
+test('createHydrationLog posts amountConsumed.milliliters with a synthesized interval', async () => {
+  await withFetch((url, init) => {
+    assert.equal(new URL(url).pathname, '/v4/users/me/dataTypes/hydration-log/dataPoints')
+    const raw = JSON.parse(init.body)
+    assert.equal(raw.interval, undefined, 'fields must nest under hydrationLog, never sit at the body root')
+    const body = raw.hydrationLog
+    assert.deepEqual(body.interval, { startTime: '2026-09-01T09:00:00.000Z', endTime: '2026-09-01T09:01:00.000Z' })
+    assert.equal(body.amountConsumed.milliliters, 250)
+    return operationOf({ name: 'users/me/dataTypes/hydration-log/dataPoints/456', hydrationLog: {} })
+  }, async () => {
+    const out = await svc.createHydrationLog('tok', { startTime: '2026-09-01T09:00:00Z', milliliters: 250 })
+    assert.equal(out.name, 'users/me/dataTypes/hydration-log/dataPoints/456')
+  })
+})
+
+test('createWeight uses a point sampleTime (no interval) and passes weightGrams through', async () => {
+  await withFetch((url, init) => {
+    assert.equal(new URL(url).pathname, '/v4/users/me/dataTypes/weight/dataPoints')
+    const raw = JSON.parse(init.body)
+    assert.equal(raw.sampleTime, undefined, 'fields must nest under weight, never sit at the body root')
+    const body = raw.weight
+    assert.deepEqual(body.sampleTime, { physicalTime: '2026-09-01T09:00:00.000Z' })
+    assert.equal(body.weightGrams, 72_500)
+    assert.equal(body.notes, 'morning')
+    assert.equal(body.interval, undefined)
+    return operationOf({ name: 'users/me/dataTypes/weight/dataPoints/789', weight: { weightGrams: 72_500 } })
+  }, async () => {
+    const out = await svc.createWeight('tok', { physicalTime: '2026-09-01T09:00:00Z', weightGrams: 72_500, notes: 'morning' })
+    assert.equal(out.name, 'users/me/dataTypes/weight/dataPoints/789')
+  })
+})
+
+test('deleteDataPoint derives the type segment from three different name shapes and batchDeletes', async () => {
+  const cases = [
+    ['users/6576655628228310145/dataTypes/hydration-log/dataPoints/1', 'hydration-log'],
+    ['users/me/dataTypes/nutrition-log/dataPoints/2', 'nutrition-log'],
+    ['users/6576655628228310145/dataTypes/weight/dataPoints/3', 'weight'],
+  ]
+  for (const [name, type] of cases) {
+    await withFetch((url, init) => {
+      assert.equal(new URL(url).pathname, `/v4/users/me/dataTypes/${type}/dataPoints:batchDelete`)
+      assert.deepEqual(JSON.parse(init.body), { names: [name] })
+      return operationOf({ dataPoints: [{ name }] })
+    }, async () => {
+      const out = await svc.deleteDataPoint('tok', name)
+      assert.deepEqual(out, { deleted: true, name })
+    })
+  }
+})
+
+test('deleteDataPoint rejects a name it cannot parse a data type out of', async () => {
+  await withFetch(() => { throw new Error('must not fetch') }, async () => {
+    await assert.rejects(() => svc.deleteDataPoint('tok', 'not-a-real-name'), /Cannot parse a Google Health data type/)
+  })
+})
+
+test('deleteDataPoint refuses a data type outside the three this write surface creates (e.g. a name copied from a read tool)', async () => {
+  await withFetch(() => { throw new Error('must not fetch') }, async () => {
+    await assert.rejects(
+      () => svc.deleteDataPoint('tok', 'users/me/dataTypes/heart-rate/dataPoints/998877'),
+      /Refusing to delete data type "heart-rate"/,
+    )
+  })
+})
+
+test('googlehealth.cjs write wrappers forward params to the service layer with a valid token', async () => {
+  const { gh } = ghFixture()
+  const calls = []
+  gh.__setGoogleHealthForTest({
+    refreshAccessToken: async () => ({ access_token: 'a', expiresAt: Date.now() + 3_600_000 }),
+    createNutritionLog: async (...a) => { calls.push(['meal', ...a]); return { name: 'n1' } },
+    createHydrationLog: async (...a) => { calls.push(['water', ...a]); return { name: 'n2' } },
+    createWeight: async (...a) => { calls.push(['weight', ...a]); return { name: 'n3' } },
+    deleteDataPoint: async (...a) => { calls.push(['delete', ...a]); return { deleted: true, name: a[1] } },
+  })
+  const mealParams = { startTime: '2026-09-01T12:00:00Z', foodDisplayName: 'Banana', mealType: 'SNACK', servingAmount: 1, calories: 105, carbsG: 27, fatG: 0.4 }
+  await gh.writeMeal(mealParams)
+  await gh.writeHydration({ startTime: '2026-09-01T09:00:00Z', milliliters: 250 })
+  await gh.writeWeight({ physicalTime: '2026-09-01T09:00:00Z', weightGrams: 72_500 })
+  await gh.deleteGoogleHealthEntry('users/me/dataTypes/weight/dataPoints/789')
+  assert.deepEqual(calls, [
+    ['meal', 'a', mealParams],
+    ['water', 'a', { startTime: '2026-09-01T09:00:00Z', milliliters: 250 }],
+    ['weight', 'a', { physicalTime: '2026-09-01T09:00:00Z', weightGrams: 72_500 }],
+    ['delete', 'a', 'users/me/dataTypes/weight/dataPoints/789'],
+  ])
+})

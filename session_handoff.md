@@ -5,6 +5,23 @@
 
 _Last updated: 2026-09-02._
 
+## ✍️ Google Health write path (2026-09-02)
+Two agents built this concurrently against a shared spec (`WRITE-SPEC.md`), grounded in a live
+write+delete round-trip against the real API this session — not guesses.
+- **Write scopes granted and live**: `googlehealth.nutrition.writeonly` (nutrition-log + hydration-log)
+  and `googlehealth.health_metrics_and_measurements.writeonly` (weight).
+- **What shipped**: `log_meal_to_google_health`, `log_water_to_google_health`, `log_weight_to_google_health`,
+  `delete_google_health_entry` (`server/mcp.mjs`); `createNutritionLog`/`createHydrationLog`/`createWeight`/
+  `deleteDataPoint` (`server/google-health-service.cjs`) + thin wrappers in `server/googlehealth.cjs`.
+  Anonymous-food nutrition-log mode only, session-interval synthesis handled internally.
+- **Proven live, not assumed**: client-supplied `name` on create is silently ignored (Google always
+  assigns its own id); there is no server-side dedupe — calling a log tool twice for the same entry
+  creates two entries, no error. See `docs/agent-food-logging-write-apis.md` §9.
+- **Still unverified/deferred**: whether writes render in the Fitbit/Google Health app UI; identified-food
+  mode (referencing a Food catalog entry — needs a food-catalog search tool health-mcp doesn't have yet);
+  exercise-session writes (out of scope — Google's Exercise schema has no sets/reps anyway, see
+  `log_workout`'s `session_id` for that).
+
 ## 🏋️ Google Health v4 expansion — exercise sessions, raw data-point access, richer nutrition (2026-09-02)
 Three agents built this concurrently against a shared spec (`server/google-health-service.cjs` +
 `server/googlehealth.cjs`, `server/db.cjs`, `server/mcp.mjs`), all against live discovery-doc + probe data
