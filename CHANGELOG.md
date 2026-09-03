@@ -14,6 +14,13 @@ All notable changes to OpenVitals (health-mcp). Dates are the day the work lande
   units as the session (metres, seconds) instead of being returned as raw millimetre integers and `"960s"`
   strings.
 
+### Fixed
+- **Intermittently failing auth test was a real state leak.** `clearSessionCookie()` sets a module-level
+  `loggedOutAt`, and `verifySessionCookie` rejects any cookie with `issuedAt <= loggedOutAt`; when a login
+  landed in the same millisecond as an earlier test's logout, the fresh cookie was refused. `init()` now
+  resets that state (a no-op in production — a new process starts at zero), instead of weakening the
+  logout check. 20 consecutive suite runs clean.
+
 ### Known API limits (verified live, not assumptions)
 - **Google Health v4 has no sets, reps, weights or exercise names.** `repetition` appears zero times in the
   discovery doc; the only `segment` fields belong to Sleep; v4beta/v5/v4alpha do not exist. Sets are

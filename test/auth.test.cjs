@@ -67,6 +67,9 @@ test('noAuthEscape is off by default and only on with explicit env', () => {
 
 test('authed(): session cookie, Basic auth, and escape hatch grant access; nothing else does', () => {
   process.env.HEALTH_MCP_PASSWORD = 'pw123'
+  // Clear logout state left by the logout test above: it lands in the same millisecond often
+  // enough that the cookie minted below was intermittently rejected as pre-logout.
+  auth.init(null)
   try {
     const cookie = /health-mcp_session=([^;]+)/.exec(auth.makeSessionCookie())[1]
     assert.equal(auth.authed({ headers: { cookie: `health-mcp_session=${cookie}` } }), true)

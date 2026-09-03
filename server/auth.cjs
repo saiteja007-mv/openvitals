@@ -7,7 +7,11 @@ const path = require('node:path')
 let dataDir = null
 let cachedAutoPassword = null
 
-function init(dir) { dataDir = dir; cachedAutoPassword = null }
+// Resets logout state too: init() means "start auth fresh". Without it, loggedOutAt survives
+// into a new init and any cookie minted in the same millisecond as a prior clearSessionCookie()
+// is rejected by the `issuedAt <= loggedOutAt` check. A no-op in production (a fresh process
+// starts at 0); in tests it stops one test's logout from invalidating the next test's login.
+function init(dir) { dataDir = dir; cachedAutoPassword = null; loggedOutAt = 0 }
 
 function getPassword() {
   if (process.env.HEALTH_MCP_PASSWORD) return process.env.HEALTH_MCP_PASSWORD
