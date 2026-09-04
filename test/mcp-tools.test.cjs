@@ -28,8 +28,12 @@ const DATA_TYPES = {
 }
 
 function fakes() {
-  const calls = { fetch: [], query: [], get: [], cached: [], writeMeal: [], writeHydration: [], writeWeight: [], delete: [] }
+  const calls = { fetch: [], query: [], get: [], cached: [], writeMeal: [], writeHydration: [], writeWeight: [], delete: [], updateGoogleHealthEntry: [] }
   const inRange = (d, { from, to }) => (!from || d >= from) && (!to || d < to)
+  const meals = []
+  let nextMealId = 1
+  const recipes = []
+  let nextRecipeId = 1
   const db = {
     listExerciseSessions: (r) => SESSIONS.filter((s) => inRange(s.date, r || {})),
     cacheExerciseSessions: (ss) => { calls.cached.push(ss); return { upserted: ss.length } },
@@ -39,7 +43,13 @@ function fakes() {
     updateWorkout: (id, patch) => { const w = WORKOUTS.find((x) => x.id === id); Object.assign(w, patch); return w },
     listFoodItems: (r) => FOODS.filter((f) => inRange(f.date, r)),
     getNutritionDaily: () => null,
-    listMeals: () => [],
+    listMeals: ({ from, to } = {}) => meals.filter((m) => inRange(m.eaten_at, { from, to })),
+    createMeal: (m) => { const row = { id: nextMealId++, google_health_name: null, ...m }; meals.push(row); return row },
+    updateMeal: (id, patch) => { const row = meals.find((m) => m.id === id); Object.assign(row, patch); return row },
+    deleteMeal: (id) => { const i = meals.findIndex((m) => m.id === id); if (i < 0) return { deleted: false }; meals.splice(i, 1); return { deleted: true } },
+    listMealRecipes: () => recipes,
+    createMealRecipe: (r) => { const row = { id: nextRecipeId++, ...r }; recipes.push(row); return row },
+    updateMealRecipe: (id, patch) => { const row = recipes.find((r) => r.id === id); Object.assign(row, patch); return row },
   }
   const googleHealth = {
     DATA_TYPES,
@@ -48,12 +58,15 @@ function fakes() {
     fetchExerciseSession: async (id) => { calls.get.push(id); return { session_id: id, source: { platform: 'FITBIT', recording_method: 'ACTIVELY_MEASURED' } } },
     exportExerciseTcx: async () => '<TrainingCenterDatabase/>',
     queryDataPoints: async (t, from, to, o) => { calls.query.push([t, from, to, o]); return { data_type: t, kind: 'sample', count: 0, truncated: false, data_points: [] } },
-    writeMeal: async (p) => { calls.writeMeal.push(p); return { name: 'users/me/dataTypes/nutrition-log/dataPoints/meal-1', raw: {} } },
+    // Each call gets its own id (meal-1, meal-2, ...) so a test can prove duplicate_meals gives every
+    // copy its own google_health_name (G5) instead of all copies sharing one fixed return value.
+    writeMeal: async (p) => { calls.writeMeal.push(p); return { name: `users/me/dataTypes/nutrition-log/dataPoints/meal-${calls.writeMeal.length}`, raw: {} } },
     writeHydration: async (p) => { calls.writeHydration.push(p); return { name: 'users/me/dataTypes/hydration-log/dataPoints/water-1', raw: {} } },
     writeWeight: async (p) => { calls.writeWeight.push(p); return { name: 'users/me/dataTypes/weight/dataPoints/weight-1', raw: {} } },
     deleteGoogleHealthEntry: async (name) => { calls.delete.push(name); return { deleted: true, name } },
+    updateGoogleHealthEntry: async (name, patch) => { calls.updateGoogleHealthEntry.push([name, patch]); return { name: 'users/me/dataTypes/nutrition-log/dataPoints/meal-1-NEW' } },
   }
-  return { db, googleHealth, calls }
+  return { db, googleHealth, calls, meals, recipes }
 }
 
 async function client(deps) {
@@ -217,5 +230,197 @@ test('log_*_to_google_health: correctly shaped writes, mg passed through untouch
     const del = await call('delete_google_health_entry', { name: meal.name })
     assert.deepEqual(del, { deleted: true, name: meal.name })
     assert.deepEqual(f.calls.delete, [meal.name])
+  } finally { await close() }
+})
+
+test('update_meal: replaces the Google Health entry and stores the NEW returned name; local_only skips Google entirely', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const created = await call('log_meal', { name: 'Oats', calories: 300, eaten_at: '2026-09-01T08:00:00' })
+    assert.equal(created.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1')
+
+    const updated = await call('update_meal', { id: created.id, calories: 350 })
+    assert.equal(f.calls.updateGoogleHealthEntry.length, 1, 'a meal with a google_health_name calls the Google update path')
+    assert.equal(f.calls.updateGoogleHealthEntry[0][0], 'users/me/dataTypes/nutrition-log/dataPoints/meal-1')
+    assert.equal(updated.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1-NEW', 'the row now points at the NEW data point Google returned')
+
+    const local = await call('update_meal', { id: created.id, calories: 400, local_only: true })
+    assert.equal(f.calls.updateGoogleHealthEntry.length, 1, 'local_only:true must not call Google at all')
+    assert.equal(local.calories, 400, 'the local field still updates')
+    assert.equal(local.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1-NEW', 'unchanged — the Google side was skipped')
+  } finally { await close() }
+})
+
+test('get_food_log: food objects expose google_health_name, the Google Health data-point id (F10)', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const flat = await call('get_food_log', { date: YDAY })
+    assert.equal(flat.foods.find((x) => x.food === 'Oats').google_health_name, 'a', 'item_key from listFoodItems must survive fmtFood, not be dropped')
+    assert.equal(flat.foods.find((x) => x.food === 'Rice').google_health_name, 'b')
+    assert.equal(flat.foods.find((x) => x.food === 'Egg').google_health_name, 'c')
+  } finally { await close() }
+})
+
+// ===== regressions caught in review of the 2026-09-04 update/delete work =====
+
+test('delete_meal keeps the local row when the Google delete fails — it holds the only copy of the entry id', async () => {
+  const f = fakes()
+  f.googleHealth.deleteGoogleHealthEntry = async () => { throw new Error('Google Health will not let this app delete or change an entry logged by FITBIT') }
+  const { call, close } = await client(f)
+  try {
+    const created = await call('log_meal', { name: 'Oats', calories: 300, eaten_at: '2026-09-01T08:00:00' })
+    const out = await call('delete_meal', { id: created.id })
+    assert.equal(out.deleted, false, 'the local row must survive so the Google entry stays addressable')
+    assert.equal(out.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1')
+    assert.match(out.google_health_error, /FITBIT/)
+    assert.equal(f.meals.length, 1, 'row still there')
+
+    const forced = await call('delete_meal', { id: created.id, local_only: true })
+    assert.equal(forced.deleted, true, 'local_only:true drops just the local row')
+    assert.equal(f.meals.length, 0)
+  } finally { await close() }
+})
+
+test('update_meal surfaces the warning when the replacement landed but the old Google entry survived', async () => {
+  const f = fakes()
+  f.googleHealth.updateGoogleHealthEntry = async () => ({ name: 'n-NEW', old_name: 'n-OLD', old_entry_deleted: false, warning: 'Created the new entry, but the old one is still there: ...' })
+  const { call, close } = await client(f)
+  try {
+    const created = await call('log_meal', { name: 'Oats', calories: 300, eaten_at: '2026-09-01T08:00:00' })
+    const out = await call('update_meal', { id: created.id, calories: 350 })
+    assert.equal(out.google_health_name, 'n-NEW')
+    assert.match(out.google_health_warning, /old one is still there/, 'a duplicate left in the Fitbit app must not be reported as a clean success')
+  } finally { await close() }
+})
+
+// ===== recipes: log_meal_recipe + batch-macro create/update_meal_recipe (2026-09-04) =====
+
+test('log_meal_recipe: logs a saved recipe as a meal and mirrors it to Google Health, persisting the returned google_health_name on the row (G5)', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const recipe = await call('create_meal_recipe', { name: 'Chicken pulao', calories: 680, protein_g: 50, carbs_g: 64, fat_g: 24 })
+    const logged = await call('log_meal_recipe', { recipe: recipe.name, eaten_at: '2026-09-01T12:00:00' })
+    assert.equal(logged.name, 'Chicken pulao')
+    assert.equal(logged.calories, 680)
+    assert.equal(logged.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1')
+    assert.equal(f.meals.find((m) => m.id === logged.id).google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/meal-1', 'persisted on the local row, not just the response')
+    assert.equal(logged.recipe, 'Chicken pulao'); assert.equal(logged.recipe_id, recipe.id); assert.equal(logged.servings, 1)
+  } finally { await close() }
+})
+
+test('log_meal_recipe: scales per-serving macros by servings and reflects the portion count in the name sent to Google', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const recipe = await call('create_meal_recipe', { name: 'Chicken pulao', calories: 680, protein_g: 50, carbs_g: 64, fat_g: 24 })
+    const logged = await call('log_meal_recipe', { recipe: recipe.name, servings: 2, eaten_at: '2026-09-01T12:00:00' })
+    assert.equal(logged.calories, 1360); assert.equal(logged.protein_g, 100); assert.equal(logged.carbs_g, 128); assert.equal(logged.fat_g, 48)
+    assert.equal(logged.servings, 2)
+    assert.equal(f.calls.writeMeal[0].foodDisplayName, 'Chicken pulao x2', 'the actual name handed to writeMeal, not just the local row, must show the portion count')
+    assert.equal(f.calls.writeMeal[0].calories, 1360)
+  } finally { await close() }
+})
+
+test('log_meal_recipe: local_only:true does not call Google at all, and still writes the local row', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const recipe = await call('create_meal_recipe', { name: 'Chicken pulao', calories: 680, protein_g: 50, carbs_g: 64, fat_g: 24 })
+    const logged = await call('log_meal_recipe', { recipe: recipe.name, local_only: true })
+    assert.equal(f.calls.writeMeal.length, 0)
+    assert.equal(logged.google_health_name, null)
+    assert.equal(f.meals.length, 1)
+    assert.equal(logged.name, 'Chicken pulao')
+  } finally { await close() }
+})
+
+test('log_meal_recipe: an unknown recipe name returns a clear error and writes nothing — no local row, no Google call', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const out = await call('log_meal_recipe', { recipe: 'Nonexistent dish' })
+    assert.match(out.error, /No recipe named "Nonexistent dish"/)
+    assert.equal(f.meals.length, 0)
+    assert.equal(f.calls.writeMeal.length, 0)
+  } finally { await close() }
+})
+
+test('log_meal_recipe: resolves a recipe case-insensitively by name, and by id', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const recipe = await call('create_meal_recipe', { name: 'Chicken Pulao', calories: 680, protein_g: 50, carbs_g: 64, fat_g: 24 })
+    const byName = await call('log_meal_recipe', { recipe: 'chicken pulao', local_only: true })
+    assert.equal(byName.recipe_id, recipe.id)
+    const byId = await call('log_meal_recipe', { recipe: String(recipe.id), local_only: true })
+    assert.equal(byId.recipe, 'Chicken Pulao')
+  } finally { await close() }
+})
+
+test('create_meal_recipe: divides batch totals by servings into per-serving columns, and errors clearly with no servings to divide by', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const r = await call('create_meal_recipe', { name: 'Batch bowl', servings: 4, batch_calories: 800, batch_protein_g: 200, batch_carbs_g: 240, batch_fat_g: 80 })
+    assert.equal(r.calories, 200); assert.equal(r.protein_g, 50); assert.equal(r.carbs_g, 60); assert.equal(r.fat_g, 20); assert.equal(r.servings, 4)
+
+    const bad = await call('create_meal_recipe', { name: 'No divisor', batch_calories: 800 })
+    assert.match(bad.error, /servings/i)
+    assert.equal(f.recipes.some((x) => x.name === 'No divisor'), false, 'nothing is stored when the divisor is missing — never guess it')
+  } finally { await close() }
+})
+
+test('create_meal_recipe: plain per-serving macros with no batch_* fields behave exactly as before', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    const r = await call('create_meal_recipe', { name: 'Simple bowl', calories: 300, protein_g: 20, carbs_g: 30, fat_g: 10 })
+    assert.equal(r.calories, 300); assert.equal(r.protein_g, 20); assert.equal(r.carbs_g, 30); assert.equal(r.fat_g, 10)
+    assert.equal(r.servings, undefined, 'servings is left untouched — no batch division happened')
+  } finally { await close() }
+})
+
+test('duplicate_meals: mirrors each copied meal to Google and gives each copy its own google_health_name; local_only:true copies locally only', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    await call('log_meal', { name: 'Oats', calories: 300, eaten_at: '2026-08-01T08:00:00', local_only: true })
+    await call('log_meal', { name: 'Pulao', calories: 680, eaten_at: '2026-08-01T19:00:00', local_only: true })
+
+    const out = await call('duplicate_meals', { from_date: '2026-08-01', to_date: '2026-08-02' })
+    assert.equal(out.copied.length, 2)
+    assert.equal(out.google_health_count, 2)
+    const names = out.copied.map((c) => c.google_health_name)
+    assert.equal(new Set(names).size, 2, 'each copy must get its own google_health_name, not a shared one')
+    assert.ok(names.every((n) => n && n.startsWith('users/me/dataTypes/nutrition-log/dataPoints/meal-')))
+
+    const local = await call('duplicate_meals', { from_date: '2026-08-01', to_date: '2026-08-03', local_only: true })
+    assert.equal(f.calls.writeMeal.length, 2, 'local_only:true must not call Google at all')
+    assert.equal(local.google_health_count, 0)
+    assert.ok(local.copied.every((c) => c.google_health_name === null))
+  } finally { await close() }
+})
+
+test('duplicate_meals: preserves the original time-of-day on the target date', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    await call('log_meal', { name: 'Oats', calories: 300, eaten_at: '2026-08-01T08:15:00', local_only: true })
+    const out = await call('duplicate_meals', { from_date: '2026-08-01', to_date: '2026-08-05', local_only: true })
+    assert.equal(out.copied[0].eaten_at, '2026-08-05T08:15:00')
+  } finally { await close() }
+})
+
+test('servings is rejected at zero or below — it is a divisor and a multiplier that reaches a real Google Health write', async () => {
+  const f = fakes(); const { call, close } = await client(f)
+  try {
+    for (const servings of [0, -5]) {
+      const bad = await call('create_meal_recipe', { name: `neg ${servings}`, batch_calories: 1000, servings })
+      assert.ok(bad.error, `create_meal_recipe must refuse servings=${servings}`)
+    }
+    const ok = await call('create_meal_recipe', { name: 'Prep bowl', batch_calories: 8813, batch_protein_g: 464, servings: 10 })
+    assert.equal(ok.calories, 881.3)
+    assert.equal(ok.protein_g, 46.4)
+
+    const negLog = await call('log_meal_recipe', { recipe: 'Prep bowl', servings: -2 })
+    assert.ok(negLog.error, 'log_meal_recipe must refuse negative servings')
+    assert.equal(f.calls.writeMeal.length, 0, 'nothing may reach Google Health')
+
+    // half a box is a real thing — positive, not integer
+    const half = await call('log_meal_recipe', { recipe: 'Prep bowl', servings: 0.5 })
+    assert.equal(half.calories, 440.65)
+    assert.equal(f.calls.writeMeal.length, 1)
   } finally { await close() }
 })

@@ -2,6 +2,57 @@
 
 All notable changes to OpenVitals (health-mcp). Dates are the day the work landed on `main`.
 
+## [0.6.0] — 2026-09-04
+
+### Added
+- **`log_meal_recipe`** — logs a saved prep recipe as a meal, into the real Google Health/Fitbit app and
+  the local database in one call. Looks the recipe up by id or name (case-insensitive; unfound names
+  error with near matches listed), multiplies its per-serving macros by `servings` (default 1), and logs
+  it with the recipe's name plus the portion count appended when `servings !== 1` (e.g. "Chicken biriyani
+  x2") so the Fitbit app shows what was actually eaten. Google does not deduplicate (see 0.3.0) — logging
+  the same prep box twice creates two entries, not one. `local_only: true` skips the Google write.
+- **`meal_recipes.servings`** — records how many servings a batch makes. `create_meal_recipe` and
+  `update_meal_recipe` now also accept `batch_calories`/`batch_protein_g`/`batch_carbs_g`/`batch_fat_g`
+  alongside `servings` and divide the batch totals down to the per-serving values the table has always
+  stored; entering per-serving macros directly still works exactly as before.
+
+### Changed
+- **`duplicate_meals` now mirrors to Google Health by default**, the same as `log_meal`. Each copied meal
+  is written to the real account individually (rather than one bulk local insert) so every copy gets its
+  own `google_health_name` and stays reachable by `update_meal`/`delete_meal` afterward. `local_only: true`
+  opts out. This can write several real entries in one call and Google never deduplicates, so use it
+  deliberately.
+
+## [0.5.0] — 2026-09-04
+
+### Added
+- **`update_google_health_entry`** — updates an already-logged meal on the real Google Health/Fitbit
+  account, not just in this server's local database. Google's own `nutrition-log` `PATCH` returns HTTP 500
+  on every body shape tried (partial or full) and has no `updateMask` parameter, so an update is
+  implemented as create-new + delete-old; the response reports the new `name`, the old `name`, and whether
+  the old entry actually got deleted.
+- **`meals.google_health_name` and `hydration.google_health_name` columns**, so a local row remembers
+  which Google Health data point it wrote. `update_meal` and `delete_meal` now propagate to Google Health
+  when that link exists, instead of only touching the local table.
+
+### Fixed
+- **Updating a logged meal did nothing on the Google Health side, and deleting a Fitbit-logged meal failed
+  with a misleading error.** Two separate bugs: `get_food_log`/`get_nutrition_intake` were dropping each
+  food item's Google Health id, so nothing was addressable for an update or delete in the first place; and
+  `delete_google_health_entry` reported Google's HTTP 403 `"Invalid argument in request: names"` as if the
+  request were malformed, when it actually means the entry belongs to another app (see below) and can
+  never be deleted by this one. Delete responses now say plainly whether Google actually removed the entry
+  rather than trusting a 200 status, and report the permission error in plain English.
+
+### Known API limits (verified live, not assumptions)
+- **An OAuth client can only delete or replace data points it wrote itself.** Google tags every entry with
+  `dataSource.platform` — `GOOGLE_WEB_API` for this server's own writes, `FITBIT` for anything logged from
+  the Fitbit app. `batchDelete` on a `FITBIT`-platform entry always fails with HTTP 403, reported as
+  `"Invalid argument in request: names"`. **Entries logged from the Fitbit app, and any identified-food
+  entry referencing Google's food catalog, are permanently read-only to this server** — no request shape
+  or retry changes that; edit them in the Fitbit/Google Health app directly. Full write-up:
+  `docs/agent-food-logging-write-apis.md` §10.
+
 ## [0.4.1] — 2026-09-03
 
 ### Changed

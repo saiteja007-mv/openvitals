@@ -236,7 +236,7 @@ Then just ask: *"summarize my sleep this week"*, *"what's my resting heart rate 
 
 ---
 
-## 🛠 Tools (~70)
+## 🛠 Tools (~77)
 
 | Group | Examples |
 |---|---|
@@ -244,8 +244,8 @@ Then just ask: *"summarize my sleep this week"*, *"what's my resting heart rate 
 | **Summaries** | `get_daily_summary` · `get_weekly_summary` · `get_progress` · `get_recommendation` · `compare_plan_vs_logged` |
 | **Exercise sessions** | `list_exercise_sessions` · `get_exercise_session` · `sync_exercise_sessions` · `export_exercise_tcx` · `get_workout_day` |
 | **Raw Google Health escape hatch** | `query_google_health` — any of the 42 data types Google Health v4 exposes, by name |
-| **Google Health writes** | `log_meal_to_google_health` — writes a food entry to your real Google Health/Fitbit account, no dedupe · `log_water_to_google_health` — writes a hydration entry to your real account, no dedupe · `log_weight_to_google_health` — writes a body-weight entry to your real account, no dedupe · `delete_google_health_entry` — undoes any of the three by the `name` they returned |
-| **Nutrition** | `log_meal` · `search_food` · `lookup_barcode` · `get_nutrition_intake` · `get_food_log` · meal recipes |
+| **Google Health writes** | `log_meal_to_google_health` — writes a food entry to your real Google Health/Fitbit account, no dedupe · `log_water_to_google_health` — writes a hydration entry to your real account, no dedupe · `log_weight_to_google_health` — writes a body-weight entry to your real account, no dedupe · `update_google_health_entry` — replaces a logged meal's macros on your real account (create-new + delete-old under the hood; Google's own update endpoint 500s) · `delete_google_health_entry` — undoes any of the above by the `name` they returned. Entries logged from the **Fitbit app itself** (not this server) can't be updated or deleted via the API — Google only lets an app touch data points it wrote |
+| **Nutrition** | `log_meal` · `update_meal` · `delete_meal` · `duplicate_meals` — all four write through to your real Google Health/Fitbit account by default; pass `local_only: true` for this server's database only · `log_meal_recipe` — logs a saved prep recipe as a meal, scaled by `servings` · meal recipes (`create_meal_recipe`/`update_meal_recipe` also take batch totals + `servings` and divide down to per-serving) · `search_food` · `lookup_barcode` · `get_nutrition_intake` · `get_food_log` — every food carries `google_health_name`, the id the update/delete tools take |
 | **Workouts** | `log_workout` (optional `session_id` to attach to a Google Health session) · `search_exercises` · workout plans |
 | **Body & habits** | `upsert_body_metric` · `list_body_metrics` · habits · reminders · hydration |
 
@@ -259,6 +259,23 @@ arrives as `exerciseType: "WORKOUT"` with `displayName` set to the muscle group 
 `"Leg"`, `"Arms"`, `"Shoulders"` — plus heart rate, calories, and HR-zone minutes for the session as a
 whole. If you want your actual sets logged, use `log_workout` and pass the `session_id` from
 `list_exercise_sessions` to attach them — that's the only place sets/reps/exercise names live.
+
+### What you can and can't change after logging
+
+Three limits are Google's, not this server's — all three verified against the live v4 API:
+
+- **An app may only modify what it wrote.** Every data point carries a `dataSource.platform`. This
+  server's writes are `GOOGLE_WEB_API`; anything you logged in the Fitbit app is `FITBIT` and is
+  permanently read-only here. Trying anyway returns HTTP 403 whose message reads
+  `Invalid argument in request: names` — a permission error wearing an argument error's clothes. Edit
+  those entries in the Fitbit app.
+- **There is no working update for food entries.** `dataPoints.patch` on `nutrition-log` returns HTTP
+  500 for every body shape, and the endpoint has no `updateMask` parameter. So `update_meal` /
+  `update_google_health_entry` create the corrected entry first, then delete the old one — which means
+  the entry comes back with a **new** `google_health_name`.
+- **Google never deduplicates.** Logging the same meal twice creates two entries, and a write that
+  times out may still have landed. Check with `get_food_log` before retrying rather than assuming it
+  failed.
 
 ---
 

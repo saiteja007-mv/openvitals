@@ -36,7 +36,7 @@ Endpoint shape is the same for every type: `POST v4/{parent}/dataPoints` (create
 
 | Data type | Writable? | Create body (top-level field) | Scope | Gotchas |
 |---|---|---|---|---|
-| `nutrition-log` | Yes | `nutritionLog` | `googlehealth.nutrition.writeonly` | Two mutually exclusive modes: anonymous food (inline `foodDisplayName`+`nutrients[]`+`energy`) is **not editable after creation** — only batchDelete+recreate; identified food (`food` = resource-name ref) auto-populates nutrients server-side, client can't set them. |
+| `nutrition-log` | Yes | `nutritionLog` | `googlehealth.nutrition.writeonly` | Two mutually exclusive modes: anonymous food (inline `foodDisplayName`+`nutrients[]`+`energy`) is **not editable after creation** — right conclusion, wrong reason (see §10, F3): `dataPoints.patch` exists in the API surface but returns HTTP 500 on every nutrition-log call tried, partial or full body, with no `updateMask` param at all — so batchDelete+recreate is the only path that actually works, not a documented restriction; identified food (`food` = resource-name ref) auto-populates nutrients server-side, client can't set them. |
 | `food` | **No — read-only** | — | — | `/health/data-types` table lists `list, get` only. You cannot register custom Food catalog entries; anonymous-food nutrition-log is the only path for a food not in Google's DB. |
 | `food-measurement-unit` | **No — read-only** | — | — | Same as above; referenced from `Serving.foodMeasurementUnit`. Exact reference-string format is UNVERIFIED (no populated example found). |
 | `hydration-log` | Yes | `hydrationLog` | `googlehealth.nutrition.writeonly` (same scope as food) | Mutable via PATCH (unlike nutrition-log). `amountConsumed.milliliters` is canonical; `userProvidedUnit` (e.g. `FLUID_OUNCE_US`) is display-only metadata, **not converted server-side** — client must pre-convert to ml itself. |
@@ -229,3 +229,54 @@ A live write+delete round-trip against the real Google Health API this session (
   content, same or different `name`) creates a brand-new entry every time — no 409, no silent overwrite,
   no "already exists" behavior of any kind. `log_meal_to_google_health` / `log_water_to_google_health` /
   `log_weight_to_google_health` document this plainly: calling one twice for the same thing logs it twice.
+
+## 10. Settled by live testing (2026-09-04) — the update/delete ceiling
+
+A second live round, targeted at "update a nutrition-log entry" and "delete a Fitbit-logged entry",
+settled the update/delete ceiling for nutrition-log data points.
+
+**Headline: batchDelete/patch/replace only work on data points the calling OAuth client itself wrote.**
+An entry's `dataSource.platform` says who wrote it — `GOOGLE_WEB_API` (this server, keyed off
+`dataSource.application.googleWebClientId`) is the only platform this server can delete or replace.
+Entries logged from the Fitbit app come back `platform: "FITBIT"` and are permanently read-only to this
+server — no scope, no request shape, no retry changes that.
+
+- **F3 — `dataPoints.patch` on `nutrition-log` is broken server-side, not just "unsupported."** A partial-
+  body PATCH returns HTTP 500. A full-body PATCH (every field re-sent) also returns HTTP 500. There is no
+  `updateMask` query parameter at all — passing one returns HTTP 400 `"Unknown name updateMask"`. No body
+  shape tried produces a working PATCH for nutrition-log. "Update an entry" can only be implemented as
+  create-new + delete-old. Never add a PATCH call for nutrition-log.
+- **F4 — batchDelete only works on data points this OAuth client wrote.** Google tags every data point with
+  `dataSource.platform` (`GOOGLE_WEB_API` for this server's own writes) and, for `GOOGLE_WEB_API` entries,
+  `dataSource.application.googleWebClientId`. Calling batchDelete on a `FITBIT`-platform entry (logged from
+  the Fitbit app, not this server) returns **HTTP 403** with the body `"Invalid argument in request:
+  names"` — a permission error wearing a malformed-argument error's message. This is the exact bug the
+  user hit trying to delete a Fitbit-logged meal.
+- **F5 — batchDelete of a well-formed but non-existent name is a silent 200, not a 404.** It returns
+  `{"done":true}` with no `response.dataPoints` key at all. A real delete returns
+  `{"done":true,"response":{"dataPoints":[{"name":"..."}]}}`. "Did it actually delete" has to be read off
+  whether `response.dataPoints` is present, never off the HTTP status — 200 means nothing on its own.
+- **F6 — `dataPoints.get` (`GET /v4/{name}`) does return `dataSource`.** Both `platform` and, for this
+  server's own entries, `application.googleWebClientId` come back on a plain get. This is the cheap
+  pre-flight for "did we write this entry, and can we therefore touch it" before attempting a delete or
+  replace. Unlike batchDelete (F5), a get on an already-deleted name **does** return HTTP 404 — so a
+  second delete of the same entry surfaces there, and `deleteDataPoint` reports it the same soft way it
+  reports F5's no-op (`deleted: false`), never as a hard error.
+- **F7 — malformed/empty `names` fail differently, and neither is the 403 above.** A structurally invalid
+  name (wrong segment count/shape) returns HTTP 400 with `"Invalid names format. Expected:
+  users/{userId}/dataTypes/{dataTypeId}/dataPoints/{dataPointId}"`. An empty or missing `names` array
+  returns HTTP 400 with `"Invalid argument in request: names"` — the same string F4's 403 uses, but at a
+  different HTTP status and for a different reason (empty array vs. wrong-owner data point). Don't use the
+  error string alone to distinguish these cases; check the HTTP status first.
+- **F8 — identified-food entries can never be faithfully recreated by this server.** An entry with
+  `nutritionLog.food` set (a reference into Google's food catalog, e.g.
+  `users/me/dataTypes/food/dataPoints/foods/4360703919455117728`) has its nutrients populated server-side —
+  a client cannot set them, on create or otherwise. This server only ever creates anonymous-food entries
+  (inline `foodDisplayName` + `nutrients` + `energy`), so an identified-food entry has no equivalent create
+  call to recreate it with. On this account, every identified-food entry observed was also platform
+  `FITBIT` — F4 and F8 compound rather than being independent risks in practice.
+
+Net effect on "update a meal": a replace (create-new + delete-old) works only when the original entry is
+both anonymous-food *and* `GOOGLE_WEB_API`-platform — i.e. only for entries this server itself wrote via
+`log_meal_to_google_health`. Anything logged from the Fitbit app, or any identified-food entry regardless
+of source, is display-only from here on.

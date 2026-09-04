@@ -29,6 +29,14 @@ This is what the API actually offers, not just what `server/google-health-servic
 | `shl.m.getShlManifest` | POST | `v4/shl/m/{externalShlId}` | (SMART Health Links — unrelated to fitness data) |
 | `shl.r.get` | GET | `v4/shl/r/{externalShlId}/{resourceToken}` | (SMART Health Links) |
 
+> **Live-tested caveat on `batchDelete`/`patch` (2026-09-04):** `batchDelete` only succeeds on data points
+> the calling OAuth client itself wrote (`dataSource.platform == GOOGLE_WEB_API`, matched to the client's
+> own `googleWebClientId`) — on a data point from another app (e.g. `platform: "FITBIT"`, from the Fitbit
+> app) it returns HTTP 403 reported as `"Invalid argument in request: names"`, a permission error disguised
+> as a malformed-argument one. `dataPoints.patch` on `nutrition-log` returns HTTP 500 in practice on every
+> body shape tried, partial or full, and there's no `updateMask` parameter at all. Full write-up:
+> `docs/agent-food-logging-write-apis.md` §10.
+
 **The corrected claim:** Google Health v4 is NOT read-only. `create` / `patch` / `batchDelete` exist for
 every writeable data type, gated behind that data type's `*.writeonly` OAuth scope (a *different* scope
 than the `*.readonly` one this server requests). OpenVitals is read-only **by choice of scope**, not

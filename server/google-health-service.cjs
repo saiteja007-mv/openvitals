@@ -1050,15 +1050,111 @@ async function createExercise(accessToken, {
 // sample/reconcile family (heart-rate, weight, body-fat, ...), so without this a `name` copied
 // from a read tool (e.g. get_heart) could batchDelete real device-synced data this tool never wrote.
 const DELETABLE_TYPES = ['nutrition-log', 'hydration-log', 'weight', 'exercise']
+
+// F3-F8 below refer to the numbered facts in docs/agent-food-logging-write-apis.md §10 — each was
+// proven against the live API on 2026-09-04, so change this section against that doc, not from memory.
+// dataPoints.get is the only call that reports dataSource.platform, i.e. whether this app is
+// allowed to delete/replace the entry (F6).
+async function getDataPoint(accessToken, name) {
+  return request('/' + name, accessToken)
+}
+
+// F4: shared by deleteDataPoint and replaceNutritionLog — Google refuses to touch a data point
+// this app didn't write; both callers surface the same plain-English explanation.
+function notMyEntryError(platform) {
+  return new Error(`Google Health will not let this app delete or change an entry logged by ${platform || 'another app'} (the Fitbit / Google Health app wrote this one). Only entries this server created can be deleted or updated through the API — edit it in the Fitbit app instead.`)
+}
+
 async function deleteDataPoint(accessToken, name) {
   const match = /dataTypes\/([^/]+)\/dataPoints\//.exec(name || '')
   if (!match) throw new Error(`Cannot parse a Google Health data type out of "${name}".`)
   if (!DELETABLE_TYPES.includes(match[1])) throw new Error(`Refusing to delete data type "${match[1]}" — only ${DELETABLE_TYPES.join(', ')} can be deleted through this tool.`)
-  await request(`/users/me/dataTypes/${match[1]}/dataPoints:batchDelete`, accessToken, {
-    method: 'POST',
-    body: { names: [name] },
-  })
+
+  let point
+  try {
+    point = await getDataPoint(accessToken, name)
+  } catch (error) {
+    // Same "nothing there to delete" case as the F5 no-op below, so report it the same way rather
+    // than throwing — deleting twice (or racing another client) must not surface as a hard error.
+    if (error.status === 404) return { deleted: false, name, note: 'No such Google Health entry — it may already be deleted.' }
+    throw error
+  }
+  const platform = point?.dataSource?.platform
+  if (platform !== 'GOOGLE_WEB_API') throw notMyEntryError(platform)
+
+  let op
+  try {
+    op = await request(`/users/me/dataTypes/${match[1]}/dataPoints:batchDelete`, accessToken, {
+      method: 'POST',
+      body: { names: [name] },
+    })
+  } catch (error) {
+    // F4: Google reports this permission failure as a bogus "Invalid argument in request: names"
+    // 403, not a normal 403. Belt-and-braces for when the pre-flight above raced with another
+    // client's delete, or somehow got skipped.
+    if (error.status === 403 && /Invalid argument in request: names/.test(error.message || '')) throw notMyEntryError(platform)
+    throw error
+  }
+
+  // F5: batchDelete of an unknown/already-gone id returns 200 {done:true} with no
+  // response.dataPoints — a silent no-op, never a 404. Only response.dataPoints proves it happened.
+  const deletedNames = op?.response?.dataPoints?.map((dp) => dp.name) || []
+  if (!deletedNames.includes(name)) return { deleted: false, name, note: 'Google Health reported no deletion — the entry no longer exists.' }
   return { deleted: true, name }
+}
+
+// F3: nutrition-log has no working PATCH — a partial body 500s, a full body 500s, and there is no
+// updateMask query param at all (400 "Unknown name updateMask"). So "update an entry" can only be
+// create-new + delete-old.
+async function replaceNutritionLog(accessToken, name, patch = {}) {
+  const point = await getDataPoint(accessToken, name)
+  const nl = point?.nutritionLog
+  if (!nl) throw new Error(`"${name}" is not a nutrition-log (food) entry.`)
+
+  const platform = point?.dataSource?.platform
+  if (platform !== 'GOOGLE_WEB_API') throw notMyEntryError(platform)
+
+  // F8: an identified-food entry references Google's catalog; only Google can set its nutrients,
+  // so this server (anonymous-food only) cannot faithfully recreate it.
+  if (nl.food) throw new Error(`This entry references Google's food catalog ("${nl.food}"), whose nutrients only Google can set. This server can only write anonymous food entries, so replacing it would lose the catalog link — edit it in the Fitbit app instead.`)
+
+  const mgFromGrams = (grams) => grams == null ? null : grams * 1000
+  const params = {
+    startTime: nl.interval?.startTime,
+    // Every entry this server writes is a 60s interval. Carrying the OLD endTime past a patched
+    // startTime makes end <= start, which sessionInterval rejects — drop it and let it resynthesize.
+    endTime: patch.startTime && !patch.endTime ? undefined : nl.interval?.endTime,
+    foodDisplayName: nl.foodDisplayName,
+    mealType: nl.mealType,
+    servingAmount: numeric(nl.serving?.amount),
+    servingUnit: nl.serving?.foodMeasurementUnit,
+    calories: numeric(nl.energy?.kcal),
+    carbsG: numeric(nl.totalCarbohydrate?.grams),
+    fatG: numeric(nl.totalFat?.grams),
+    proteinG: nutrientGrams(nl, ['PROTEIN']),
+    fiberG: nutrientGrams(nl, ['DIETARY_FIBER']),
+    sugarG: nutrientGrams(nl, ['SUGAR']),
+    sodiumMg: mgFromGrams(nutrientGrams(nl, ['SODIUM'])),
+    saturatedFatG: nutrientGrams(nl, ['SATURATED_FAT']),
+    cholesterolMg: mgFromGrams(nutrientGrams(nl, ['CHOLESTEROL'])),
+    ...patch,
+  }
+
+  // Create first, then delete: a failed delete leaves a harmless duplicate the user can remove by
+  // hand; a failed create after the delete would lose the entry outright.
+  const created = await createNutritionLog(accessToken, params)
+
+  let old_entry_deleted = false
+  let warning
+  try {
+    const result = await deleteDataPoint(accessToken, name)
+    old_entry_deleted = result.deleted
+    if (!old_entry_deleted) warning = `Created the new entry, but the old one is still there: ${result.note}`
+  } catch (error) {
+    warning = `Created the new entry, but deleting the old one failed — it is still there: ${error.message}`
+  }
+
+  return { name: created.name, old_name: name, old_entry_deleted, ...(warning ? { warning } : {}) }
 }
 
 module.exports = {
@@ -1081,5 +1177,7 @@ module.exports = {
   createWeight,
   createExercise,
   deleteDataPoint,
+  getDataPoint,
+  replaceNutritionLog,
   __test: { translateGoogleHealth, dateFromCivil, durationSeconds, dataFilter, toSession },
 }

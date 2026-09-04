@@ -175,6 +175,16 @@ async function deleteGoogleHealthEntry(name) {
   const creds = await validToken(getCreds(), loadConfig())
   return googleHealth.deleteDataPoint(creds.token.access_token, name)
 }
+// dataPoints.get — the only call that reports who wrote an entry (dataSource.platform).
+async function getGoogleHealthEntry(name) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.getDataPoint(creds.token.access_token, name)
+}
+// nutrition-log has no working PATCH (500s server-side) — an update is create-new + delete-old.
+async function updateGoogleHealthEntry(name, patch) {
+  const creds = await validToken(getCreds(), loadConfig())
+  return googleHealth.replaceNutritionLog(creds.token.access_token, name, patch)
+}
 async function getStatus() {
   const creds = getCreds()
   let configured = false
@@ -186,6 +196,7 @@ module.exports = {
   getHealth, sync, getStatus, fetchNutrition, backfill,
   fetchExerciseSessions, fetchExerciseSession, exportExerciseTcx, queryDataPoints,
   writeMeal, writeHydration, writeWeight, writeExercise, deleteGoogleHealthEntry,
+  getGoogleHealthEntry, updateGoogleHealthEntry,
   DATA_TYPES: googleHealth.DATA_TYPES,
   cacheStats: () => db().healthCacheStats(),
   cachedDates: (range) => db().listCachedHealthDates(range),

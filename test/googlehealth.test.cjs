@@ -452,6 +452,9 @@ test('deleteDataPoint derives the type segment from three different name shapes 
   ]
   for (const [name, type] of cases) {
     await withFetch((url, init) => {
+      // F6: the pre-flight GET (dataPoints.get) runs first to check dataSource.platform — its path
+      // is just `/${name}`, whatever shape that name is (F2: no parent/name rewriting).
+      if (init.method === 'GET') return { name, dataSource: { platform: 'GOOGLE_WEB_API' } }
       assert.equal(new URL(url).pathname, `/v4/users/me/dataTypes/${type}/dataPoints:batchDelete`)
       assert.deepEqual(JSON.parse(init.body), { names: [name] })
       return operationOf({ dataPoints: [{ name }] })
@@ -460,6 +463,36 @@ test('deleteDataPoint derives the type segment from three different name shapes 
       assert.deepEqual(out, { deleted: true, name })
     })
   }
+})
+
+test('deleteDataPoint refuses an entry logged by another app (FITBIT) and never issues batchDelete (F4)', async () => {
+  const name = 'users/6576655628228310145/dataTypes/nutrition-log/dataPoints/FIT1'
+  await withFetch(() => ({ name, dataSource: { platform: 'FITBIT' } }), async (urls) => {
+    await assert.rejects(() => svc.deleteDataPoint('tok', name), /Fitbit/)
+    assert.equal(urls.length, 1, 'batchDelete must never be requested once the pre-flight shows another app wrote this entry')
+    assert.ok(!urls[0].includes(':batchDelete'))
+  })
+})
+
+test('deleteDataPoint returns deleted:false, not a throw, when Google reports no deletion (F5)', async () => {
+  const name = 'users/me/dataTypes/hydration-log/dataPoints/GONE1'
+  await withFetch((url, init) => (init.method === 'GET' ? { name, dataSource: { platform: 'GOOGLE_WEB_API' } } : { done: true }), async () => {
+    const out = await svc.deleteDataPoint('tok', name)
+    assert.deepEqual(out, { deleted: false, name, note: 'Google Health reported no deletion — the entry no longer exists.' })
+  })
+})
+
+test('deleteDataPoint maps a 403 "Invalid argument in request: names" onto the plain-English cross-app message (F4)', async () => {
+  // Simulates the pre-flight racing another client's delete (code comment above the catch): the
+  // GET still says GOOGLE_WEB_API, but batchDelete itself 403s with Google's misleading message.
+  const name = 'users/6576655628228310145/dataTypes/nutrition-log/dataPoints/RACE1'
+  const real = globalThis.fetch
+  globalThis.fetch = async (url, init) => (init.method === 'GET'
+    ? Response.json({ name, dataSource: { platform: 'GOOGLE_WEB_API' } })
+    : Response.json({ error: { message: 'Invalid argument in request: names' } }, { status: 403 }))
+  try {
+    await assert.rejects(() => svc.deleteDataPoint('tok', name), /Fitbit/)
+  } finally { globalThis.fetch = real }
 })
 
 test('deleteDataPoint rejects a name it cannot parse a data type out of', async () => {
@@ -498,4 +531,131 @@ test('googlehealth.cjs write wrappers forward params to the service layer with a
     ['weight', 'a', { physicalTime: '2026-09-01T09:00:00Z', weightGrams: 72_500 }],
     ['delete', 'a', 'users/me/dataTypes/weight/dataPoints/789'],
   ])
+})
+
+// ===== replaceNutritionLog: F3's create-new + delete-old (PATCH 500s server-side) =====
+
+const OLD_NL_NAME = 'users/6576655628228310145/dataTypes/nutrition-log/dataPoints/OLD1'
+const OLD_NL_POINT = {
+  name: OLD_NL_NAME,
+  dataSource: { platform: 'GOOGLE_WEB_API', application: { googleWebClientId: 'x' } },
+  nutritionLog: {
+    interval: { startTime: '2026-09-01T12:00:00.000Z', endTime: '2026-09-01T12:01:00.000Z', startUtcOffset: '-18000s', endUtcOffset: '-18000s' },
+    foodDisplayName: 'Chicken Bowl',
+    mealType: 'LUNCH',
+    serving: { amount: 1 },
+    energy: { kcal: 500 },
+    totalCarbohydrate: { grams: 40 },
+    totalFat: { grams: 20 },
+    nutrients: [
+      { nutrient: 'PROTEIN', quantity: { grams: 35 } },
+      { nutrient: 'DIETARY_FIBER', quantity: { grams: 5 } },
+      { nutrient: 'SODIUM', quantity: { grams: 0.6 } }, // 600mg
+    ],
+  },
+}
+
+test('replaceNutritionLog creates the new entry before deleting the old one, and carries unpatched fields over (sodium mg<->grams round trip)', async () => {
+  const NEW_NAME = 'users/6576655628228310145/dataTypes/nutrition-log/dataPoints/NEW1'
+  let createBody
+  await withFetch((url, init) => {
+    if (init.method === 'GET') return OLD_NL_POINT
+    if (new URL(url).pathname.endsWith(':batchDelete')) return operationOf({ dataPoints: [{ name: OLD_NL_NAME }] })
+    createBody = JSON.parse(init.body).nutritionLog
+    return operationOf({ name: NEW_NAME, nutritionLog: createBody })
+  }, async (urls) => {
+    const out = await svc.replaceNutritionLog('tok', OLD_NL_NAME, { calories: 550 })
+    assert.equal(urls.length, 4, 'GET old, POST create, GET old again (delete pre-flight), POST batchDelete')
+    assert.ok(!urls[1].includes(':batchDelete'), 'the create POST runs before any delete request')
+    assert.ok(urls[3].endsWith(':batchDelete'), 'the delete runs last')
+    assert.deepEqual(out, { name: NEW_NAME, old_name: OLD_NL_NAME, old_entry_deleted: true })
+  })
+  assert.equal(createBody.energy.kcal, 550, 'patched field applied')
+  assert.equal(createBody.foodDisplayName, 'Chicken Bowl', 'unpatched field carried over from the existing entry')
+  assert.equal(createBody.mealType, 'LUNCH')
+  assert.equal(createBody.totalCarbohydrate.grams, 40)
+  assert.equal(createBody.totalFat.grams, 20)
+  assert.equal(createBody.nutrients.find((n) => n.nutrient === 'PROTEIN').quantity.grams, 35, 'protein survives the round trip')
+  assert.equal(createBody.nutrients.find((n) => n.nutrient === 'DIETARY_FIBER').quantity.grams, 5, 'fiber survives the round trip')
+  assert.equal(createBody.nutrients.find((n) => n.nutrient === 'SODIUM').quantity.grams, 0.6, 'sodium survives the grams->mg->grams round trip')
+})
+
+test('replaceNutritionLog refuses an identified-food entry (nutritionLog.food set) without writing anything (F8)', async () => {
+  const point = { ...OLD_NL_POINT, nutritionLog: { ...OLD_NL_POINT.nutritionLog, food: 'users/me/dataTypes/food/dataPoints/14740568' } }
+  await withFetch((url, init) => {
+    if (init.method === 'GET') return point
+    throw new Error('must not write — an identified-food entry must be refused before any create/delete call')
+  }, async (urls) => {
+    await assert.rejects(() => svc.replaceNutritionLog('tok', OLD_NL_NAME, {}), /food catalog/)
+    assert.equal(urls.length, 1, 'only the initial GET ran')
+  })
+})
+
+test('replaceNutritionLog keeps the new entry and reports old_entry_deleted:false with a warning when Google reports no deletion (F5)', async () => {
+  const NEW_NAME = 'users/6576655628228310145/dataTypes/nutrition-log/dataPoints/NEW2'
+  await withFetch((url, init) => {
+    if (init.method === 'GET') return OLD_NL_POINT
+    if (new URL(url).pathname.endsWith(':batchDelete')) return { done: true } // F5: no response.dataPoints — a silent no-op
+    return operationOf({ name: NEW_NAME, nutritionLog: JSON.parse(init.body).nutritionLog })
+  }, async () => {
+    const out = await svc.replaceNutritionLog('tok', OLD_NL_NAME, {})
+    assert.equal(out.name, NEW_NAME, 'the successful create is not thrown away')
+    assert.equal(out.old_name, OLD_NL_NAME)
+    assert.equal(out.old_entry_deleted, false)
+    assert.match(out.warning, /Created the new entry, but the old one is still there/)
+  })
+})
+
+// ===== regressions caught in review of the 2026-09-04 update/delete work =====
+
+test('deleteDataPoint reports deleted:false (not a throw) when the pre-flight says the entry is already gone', async () => {
+  // Deleting twice, or racing another client, must land on the same soft answer as the F5 no-op —
+  // a 404 from the pre-flight GET is "nothing to delete", not a failure.
+  const name = 'users/me/dataTypes/nutrition-log/dataPoints/GONE2'
+  const real = globalThis.fetch
+  globalThis.fetch = async () => Response.json({ error: { message: 'not found' } }, { status: 404 })
+  try {
+    const out = await svc.deleteDataPoint('tok', name)
+    assert.equal(out.deleted, false)
+    assert.equal(out.name, name)
+    assert.match(out.note, /already be deleted/)
+  } finally { globalThis.fetch = real }
+})
+
+test('replaceNutritionLog drops the stale endTime when startTime is patched, instead of 400ing on end <= start', async () => {
+  // Every entry this server writes is a 60s interval, so carrying the old endTime past a later
+  // startTime makes end <= start — sessionInterval rejects that, breaking the commonest edit
+  // (correcting the time a meal was eaten).
+  let created
+  await withFetch((url, init) => {
+    if (init.method === 'GET') return OLD_NL_POINT
+    if (init.method === 'POST' && !url.includes(':batchDelete')) {
+      created = JSON.parse(init.body).nutritionLog
+      return operationOf({ name: OLD_NL_NAME + '-NEW', nutritionLog: created })
+    }
+    return operationOf({ dataPoints: [{ name: OLD_NL_NAME }] })
+  }, async () => {
+    const out = await svc.replaceNutritionLog('tok', OLD_NL_NAME, { startTime: '2026-09-01T18:00:00.000Z' })
+    assert.equal(out.old_entry_deleted, true)
+    assert.equal(created.interval.startTime, '2026-09-01T18:00:00.000Z')
+    assert.equal(created.interval.endTime, '2026-09-01T18:01:00.000Z', 'resynthesized as start+60s, not the old 12:01 end')
+  })
+})
+
+test('replaceNutritionLog carries the serving unit over like every other unpatched field', async () => {
+  const withUnit = { ...OLD_NL_POINT, nutritionLog: { ...OLD_NL_POINT.nutritionLog, serving: { amount: 2, foodMeasurementUnit: 'users/me/dataTypes/food-measurement-unit/dataPoints/cup' } } }
+  let created
+  await withFetch((url, init) => {
+    if (init.method === 'GET') return withUnit
+    if (init.method === 'POST' && !url.includes(':batchDelete')) {
+      created = JSON.parse(init.body).nutritionLog
+      return operationOf({ name: OLD_NL_NAME + '-NEW' })
+    }
+    return operationOf({ dataPoints: [{ name: OLD_NL_NAME }] })
+  }, async () => {
+    await svc.replaceNutritionLog('tok', OLD_NL_NAME, { calories: 600 })
+    assert.equal(created.serving.amount, 2)
+    assert.equal(created.serving.foodMeasurementUnit, 'users/me/dataTypes/food-measurement-unit/dataPoints/cup')
+    assert.equal(created.energy.kcal, 600, 'the patched field still wins')
+  })
 })

@@ -133,6 +133,13 @@ function initDb(file) {
     sodium: 'REAL', saturated_fat: 'REAL', cholesterol: 'REAL', food_ref: 'TEXT', nutrients_json: 'TEXT',
   })
   ensureColumns('gh_nutrition_daily', { saturated_fat: 'REAL', cholesterol: 'REAL', nutrients_json: 'TEXT' })
+  // The Google Health data point id for this row, so update/delete can reach the real entry in the
+  // Fitbit app; null for local-only rows and for everything logged before this column existed.
+  ensureColumns('meals', { google_health_name: 'TEXT' })
+  ensureColumns('hydration', { google_health_name: 'TEXT' })
+  // How many servings a batch makes; calories/protein_g/carbs_g/fat_g stay PER SERVING regardless —
+  // this is only the divisor create/update_meal_recipe use for a batch_* input.
+  ensureColumns('meal_recipes', { servings: 'REAL' })
   db.exec("INSERT OR IGNORE INTO settings (id) VALUES (1)")
   seedMealRecipes()
   seedWorkoutPlans()
@@ -154,10 +161,10 @@ function ensureColumns(table, cols) {
 
 const COLS = {
   workouts: ['exercise_id', 'name', 'performed_at', 'sets', 'reps', 'weight_kg', 'duration_min', 'notes', 'plan_id', 'session_id'],
-  meals: ['name', 'meal_type', 'eaten_at', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes'],
-  meal_recipes: ['name', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes'],
+  meals: ['name', 'meal_type', 'eaten_at', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes', 'google_health_name'],
+  meal_recipes: ['name', 'calories', 'protein_g', 'carbs_g', 'fat_g', 'notes', 'servings'],
   reminders: ['kind', 'channel', 'enabled', 'time_of_day', 'target'],
-  hydration: ['at', 'ml', 'notes'],
+  hydration: ['at', 'ml', 'notes', 'google_health_name'],
 }
 const BUMP_UPDATED_AT = new Set(['meal_recipes', 'reminders'])
 

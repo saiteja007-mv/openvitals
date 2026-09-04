@@ -273,6 +273,58 @@ test('migration is idempotent on a DB that already has the old columns', () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+test('meals.google_health_name round-trips through createMeal/updateMeal, and is added idempotently to a pre-existing meals table', () => {
+  const created = db.createMeal({ name: 'Oats', eaten_at: '2026-07-01T08:00:00', calories: 300, google_health_name: 'users/me/dataTypes/nutrition-log/dataPoints/1' })
+  assert.equal(created.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/1')
+  const updated = db.updateMeal(created.id, { google_health_name: 'users/me/dataTypes/nutrition-log/dataPoints/2' })
+  assert.equal(updated.google_health_name, 'users/me/dataTypes/nutrition-log/dataPoints/2')
+
+  // Pre-create v1 meals/hydration tables (no google_health_name column) as a live DB would have them.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'health-mcp-mig-meals-'))
+  const file = path.join(dir, 'old.sqlite')
+  const { DatabaseSync } = require('node:sqlite')
+  const old = new DatabaseSync(file)
+  old.exec(`
+    CREATE TABLE meals (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, meal_type TEXT, eaten_at TEXT NOT NULL,
+      calories REAL, protein_g REAL, carbs_g REAL, fat_g REAL, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+    CREATE TABLE hydration (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, ml REAL NOT NULL, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+    INSERT INTO meals (name, eaten_at, calories) VALUES ('Old meal', '2026-07-01T08:00:00', 250);
+  `)
+  old.close()
+  db.initDb(file)
+  db.initDb(file) // second boot must not throw "duplicate column"
+  const cols = (t) => new Set(new DatabaseSync(file).prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name))
+  assert.ok(cols('meals').has('google_health_name'))
+  assert.ok(cols('hydration').has('google_health_name'))
+  assert.equal(db.listMeals({})[0].name, 'Old meal') // pre-existing rows survive
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('meal_recipes.servings round-trips through createMealRecipe/updateMealRecipe, and is added idempotently to a pre-existing meal_recipes table', () => {
+  const created = db.createMealRecipe({ name: 'Meal prep batch', calories: 200, protein_g: 50, carbs_g: 60, fat_g: 20, servings: 4 })
+  assert.equal(created.servings, 4)
+  const updated = db.updateMealRecipe(created.id, { servings: 5 })
+  assert.equal(updated.servings, 5)
+
+  // Pre-create a v1 meal_recipes table (no servings column) as a live DB would have it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'health-mcp-mig-recipes-'))
+  const file = path.join(dir, 'old.sqlite')
+  const { DatabaseSync } = require('node:sqlite')
+  const old = new DatabaseSync(file)
+  old.exec(`
+    CREATE TABLE meal_recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, calories REAL, protein_g REAL, carbs_g REAL, fat_g REAL, notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+    INSERT INTO meal_recipes (name, calories) VALUES ('Old recipe', 400);
+  `)
+  old.close()
+  db.initDb(file)
+  db.initDb(file) // second boot must not throw "duplicate column"
+  const cols = new Set(new DatabaseSync(file).prepare(`PRAGMA table_info(meal_recipes)`).all().map((c) => c.name))
+  assert.ok(cols.has('servings'))
+  assert.equal(db.listMealRecipes().find((r) => r.name === 'Old recipe').calories, 400) // pre-existing rows survive
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('exercise sessions: upsert twice = one row, full Session round-trips, stats + range', () => {
   assert.deepEqual(db.cacheExerciseSessions([SESSION]), { upserted: 1 })
   db.cacheExerciseSessions([{ ...SESSION, calories_kcal: 95 }])

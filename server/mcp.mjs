@@ -35,6 +35,8 @@ const r1 = (v) => (v == null ? null : Math.round(v * 10) / 10)
 const mg = (v) => (v == null ? null : Math.round(v * 1000))
 // serving is "1 cup" style — Google splits amount/unit; keep both so a re-log can reuse the unit.
 const fmtFood = (i) => ({
+  // the addressable Google Health data point id — what update_google_health_entry / delete_google_health_entry take
+  google_health_name: i.item_key ?? null,
   time: i.eaten_at ? i.eaten_at.slice(11, 16) : null, meal: i.meal_type, food: i.food_name,
   serving: i.serving_amount != null || i.serving_unit ? { amount: i.serving_amount ?? null, unit: i.serving_unit ?? null } : null,
   calories: r0(i.calories), protein_g: r1(i.protein), carbs_g: r1(i.carbs), fat_g: r1(i.fat),
@@ -118,7 +120,7 @@ export function buildServer(d) {
       if (span > 8) return { error: `range is ${span} days; this tool is capped at 8. Run: node server/backfill-gh.cjs ${from} ${to}` }
       return googleHealth.backfill(from, to, { force: Boolean(force) })
     })
-  T('get_nutrition_intake', 'Calories + full macros (protein/carbs/fat/fiber) AND the list of foods you ate on a date, from your Google Health food log (cached by sync_nutrition_cache). Falls back to live Google Health calories, then meals logged via this tool. Defaults to today.',
+  T('get_nutrition_intake', 'Calories + full macros (protein/carbs/fat/fiber) AND the list of foods you ate on a date, from your Google Health food log (cached by sync_nutrition_cache). Falls back to live Google Health calories, then meals logged via this tool. Defaults to today. Each food carries google_health_name, the id to pass to update_google_health_entry or delete_google_health_entry; entries logged in the Fitbit app can only be edited in that app.',
     { date: z.string().optional() },
     async ({ date }) => {
       const dt = date || today()
@@ -147,7 +149,7 @@ export function buildServer(d) {
         note: 'This date is not in the nutrition cache (macros + foods). Run sync_nutrition_cache to backfill it.',
       }
     })
-  T('get_food_log', 'The individual foods/items you logged on a date from Google Health: name, meal type, time, serving {amount, unit}, calories, protein/carbs/fat/fiber/sugar/saturated fat (grams), sodium/cholesterol (milligrams — trace amounts round to 0 in grams), and a `nutrients` object with every nutrient Google recorded (e.g. CALCIUM, IRON, VITAMIN_C in grams). Defaults to today. group_by_meal buckets items by meal type in day order with per-meal totals.',
+  T('get_food_log', 'The individual foods/items you logged on a date from Google Health: name, meal type, time, serving {amount, unit}, calories, protein/carbs/fat/fiber/sugar/saturated fat (grams), sodium/cholesterol (milligrams — trace amounts round to 0 in grams), and a `nutrients` object with every nutrient Google recorded (e.g. CALCIUM, IRON, VITAMIN_C in grams). Defaults to today. group_by_meal buckets items by meal type in day order with per-meal totals. Each food carries google_health_name, the id to pass to update_google_health_entry or delete_google_health_entry; entries logged in the Fitbit app can only be edited in that app.',
     { date: z.string().optional(), group_by_meal: z.boolean().optional() },
     ({ date, group_by_meal }) => {
       const dt = date || today()
@@ -361,8 +363,21 @@ export function buildServer(d) {
         note: 'Sets/reps appear in the Google Health app inside the session notes — the API has no structured field for them.' }
     })
 
-  T('delete_google_health_entry', 'Delete an entry previously written by log_meal_to_google_health / log_water_to_google_health / log_weight_to_google_health. `name` is the value that call returned.',
+  T('delete_google_health_entry', 'Delete an entry previously written by log_meal_to_google_health / log_water_to_google_health / log_weight_to_google_health. `name` is the value that call returned. Only works on entries this server wrote; one logged in the Fitbit app returns a permission error and must be deleted in that app.',
     { name: z.string() }, ({ name }) => googleHealth.deleteGoogleHealthEntry(name))
+  T('update_google_health_entry', 'Edit a food entry already in Google Health (get its `name` from get_food_log / get_nutrition_intake as google_health_name) that has no row in the local meals table — including anything logged with log_meal_to_google_health, which writes to Google only. If the meal came from log_meal it HAS a local row: use update_meal with its id instead, so both sides stay in sync. Google Health has no working update for food entries, so this deletes the old entry and writes a new one — the entry gets a NEW `name`, returned as `name`, with the old one as `old_name`. Only works on entries this server logged; Google refuses to let one app modify another app\'s data, so an entry logged in the Fitbit app must be edited in the Fitbit app.',
+    {
+      name: z.string(), food_name: z.string().optional(), meal_type: z.string().optional(),
+      calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(),
+      fat_g: z.number().optional(), fiber_g: z.number().optional(), sugar_g: z.number().optional(),
+      sodium_mg: z.number().optional(), eaten_at: z.string().optional(),
+    },
+    ({ name, food_name, meal_type, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, eaten_at }) =>
+      googleHealth.updateGoogleHealthEntry(name, dropNulls({
+        foodDisplayName: food_name, mealType: meal_type ? meal_type.toUpperCase() : undefined,
+        calories, proteinG: protein_g, carbsG: carbs_g, fatG: fat_g, fiberG: fiber_g, sugarG: sugar_g,
+        sodiumMg: sodium_mg, startTime: eaten_at,
+      })))
 
   // ===== Workout plans =====
   T('list_workout_plans', 'Saved workout plans/routines with their exercises.', {}, () => db.listWorkoutPlans())
@@ -378,61 +393,167 @@ export function buildServer(d) {
     ({ plan_id, date }) => { const plan = db.getWorkoutPlan(plan_id); if (!plan) throw new Error('plan not found'); const dt = date || today(); const logged = db.listWorkouts({ from: dt, to: nextDay(dt) }).filter((w) => w.plan_id === plan.id); return { plan, date: dt, planned: plan.items, logged } })
 
   // ===== Meals & nutrition =====
+  // One place where a local meal row also becomes a real Google Health entry: write the row,
+  // mirror it, persist the id Google returns. Callers pass local_only to skip Google.
+  // Mirroring-by-default (when local_only is falsy) is deliberate — "log my meal" has meant the
+  // phone app both times a human said it here, and a description telling the model to pick a
+  // different tool did not survive a client with a cached tool list.
+  async function logMealRow({ name, meal_type, calories, protein_g, carbs_g, fat_g, notes, eaten_at }, local_only) {
+    const row = db.createMeal({ name, meal_type, calories, protein_g, carbs_g, fat_g, notes, eaten_at })
+    if (local_only) return { ...row, google_health_name: null, note: 'local only — not in the Google Health app' }
+    try {
+      const { name: gName } = await googleHealth.writeMeal({
+        startTime: eaten_at, foodDisplayName: name, mealType: (meal_type || 'ANYTIME').toUpperCase(),
+        servingAmount: 1, calories: calories ?? 0, carbsG: carbs_g ?? 0, fatG: fat_g ?? 0, proteinG: protein_g,
+      })
+      // Persisted so update_meal/delete_meal can reach the Google entry later.
+      return db.updateMeal(row.id, { google_health_name: gName })
+    } catch (e) {
+      // The local row is already saved; say plainly that only half of it landed.
+      return { ...row, google_health_name: null, google_health_error: String(e.message || e).slice(0, 200) }
+    }
+  }
   T('list_meals', 'Logged meals in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listMeals({ from, to }))
   T('log_meal', 'Log a meal. Writes to the REAL Google Health / Fitbit app AND this server\'s local database, so it shows up where the user actually looks. Pass local_only:true to skip Google. Google does not deduplicate, so do not call twice for the same meal; undo the Google side with delete_google_health_entry using the returned google_health_name.',
     { name: z.string(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(), eaten_at: z.string().optional(), local_only: z.boolean().optional() },
-    async ({ local_only, ...a }) => {
-      const eaten_at = a.eaten_at || localNow()
-      const row = db.createMeal({ ...a, eaten_at })
-      if (local_only) return { ...row, google_health_name: null, note: 'local only — not in the Google Health app' }
-      // Mirroring is the default because "log my meal" has meant the phone app both times a
-      // human said it here, and a description telling the model to pick the other tool did not
-      // survive a client with a cached tool list.
+    async ({ local_only, ...a }) => logMealRow({ ...a, eaten_at: a.eaten_at || localNow() }, local_only))
+  T('update_meal', 'Update a logged meal by id. If it was also written to Google Health, replaces that entry with the updated values too (Google Health has no working update — this deletes the old entry and writes a new one, so google_health_name changes). Pass local_only:true to skip Google.',
+    { id: z.number(), name: z.string().optional(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(), local_only: z.boolean().optional() },
+    async ({ id, local_only, ...p }) => {
+      const row = db.updateMeal(id, p)
+      if (!row.google_health_name) return { ...row, google_health: 'not linked — this meal was never written to Google Health' }
+      if (local_only) return row
       try {
-        const { name } = await googleHealth.writeMeal({
-          startTime: eaten_at, foodDisplayName: a.name, mealType: (a.meal_type || 'ANYTIME').toUpperCase(),
-          servingAmount: 1, calories: a.calories ?? 0, carbsG: a.carbs_g ?? 0, fatG: a.fat_g ?? 0, proteinG: a.protein_g,
+        const { name, warning } = await googleHealth.updateGoogleHealthEntry(row.google_health_name, {
+          startTime: row.eaten_at, foodDisplayName: row.name, mealType: (row.meal_type || 'ANYTIME').toUpperCase(),
+          servingAmount: 1, calories: row.calories ?? 0, carbsG: row.carbs_g ?? 0, fatG: row.fat_g ?? 0, proteinG: row.protein_g,
         })
-        return { ...row, google_health_name: name }
+        // Replace, not patch — Google issues a NEW data point id, so the row must track it to stay addressable.
+        // `warning` means the new entry landed but the old one is still in the app: say so, don't call it clean.
+        return { ...db.updateMeal(id, { google_health_name: name }), ...(warning ? { google_health_warning: warning } : {}) }
       } catch (e) {
-        // The local row is already saved; say plainly that only half of it landed.
-        return { ...row, google_health_name: null, google_health_error: String(e.message || e).slice(0, 200) }
+        return { ...row, google_health_error: String(e.message || e).slice(0, 300) }
       }
     })
-  T('update_meal', 'Update a logged meal by id.',
-    { id: z.number(), name: z.string().optional(), meal_type: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional() },
-    ({ id, ...p }) => db.updateMeal(id, p))
-  T('delete_meal', 'Delete a logged meal by id.', { id: z.number() }, ({ id }) => db.deleteMeal(id))
-  T('duplicate_meals', 'Copy all meals from one date to another (e.g. repeat yesterday).',
-    { from_date: z.string().describe('YYYY-MM-DD'), to_date: z.string().describe('YYYY-MM-DD') },
-    ({ from_date, to_date }) => db.duplicateMeals(from_date, to_date))
+  T('delete_meal', 'Delete a logged meal by id. If it was also written to Google Health, deletes that entry too (unless local_only) and reports both sides.',
+    { id: z.number(), local_only: z.boolean().optional() },
+    async ({ id, local_only }) => {
+      const row = db.updateMeal(id, {})
+      if (!row?.google_health_name || local_only) return db.deleteMeal(id)
+      try {
+        const { deleted } = await googleHealth.deleteGoogleHealthEntry(row.google_health_name)
+        return { ...db.deleteMeal(id), google_health_deleted: deleted }
+      } catch (e) {
+        // Keep the local row: it holds the only copy of google_health_name, so deleting it here
+        // would strand the Google Health entry with no way left to address it.
+        return { deleted: false, google_health_name: row.google_health_name, google_health_error: String(e.message || e).slice(0, 300),
+          note: 'Local row kept so the Google Health entry can still be found — retry, or pass local_only:true to drop just the local row.' }
+      }
+    })
+  // duplicate_meals writes one real Google Health entry per copied meal (unless local_only), so
+  // every copy gets its own google_health_name — a bulk local insert would leave the copies
+  // unreachable by update_meal/delete_meal, the exact bug class the 2026-09-04 fix closed.
+  T('duplicate_meals', 'Copy all meals from one date to another (e.g. repeat yesterday). Writes one real entry per copied meal to the Google Health / Fitbit app by default — Google does not deduplicate, so do not call this twice for the same pair of dates. Pass local_only:true to copy locally only.',
+    { from_date: z.string().describe('YYYY-MM-DD'), to_date: z.string().describe('YYYY-MM-DD'), local_only: z.boolean().optional() },
+    async ({ from_date, to_date, local_only }) => {
+      const source = db.listMeals({ from: from_date, to: nextDay(from_date) })
+      const copies = []
+      // to_date + the original's time-of-day, same shifting db.duplicateMeals used to do itself.
+      for (const r of source) copies.push(await logMealRow({
+        name: r.name, meal_type: r.meal_type, calories: r.calories, protein_g: r.protein_g, carbs_g: r.carbs_g, fat_g: r.fat_g, notes: r.notes,
+        eaten_at: to_date + r.eaten_at.slice(10),
+      }, local_only))
+      return { copied: copies, google_health_count: copies.filter((c) => c.google_health_name).length }
+    })
   T('search_food', 'Search foods for nutrition facts (calories + macros per serving).', { query: z.string() }, ({ query }) => food.searchFood(query))
   T('lookup_barcode', 'Look up a packaged food by barcode for nutrition facts.', { code: z.string() }, ({ code }) => food.lookupBarcode(code))
   T('list_meal_recipes', 'Saved meal templates/recipes.', {}, () => db.listMealRecipes())
-  T('create_meal_recipe', 'Save a reusable meal template with its macros.',
-    { name: z.string(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional() },
-    (a) => db.createMealRecipe(a))
-  T('update_meal_recipe', 'Update a meal template by id.',
-    { id: z.number(), name: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional() },
-    ({ id, ...p }) => db.updateMealRecipe(id, p))
+  // batch_calories/batch_protein_g/batch_carbs_g/batch_fat_g let a recipe be entered as a whole
+  // prep-batch total instead of per serving; `servings` (just passed, or already on the row) is
+  // the divisor. No guessing: missing divisor or a plain+batch pair for the same macro is an error.
+  const BATCH_MACROS = { calories: 'batch_calories', protein_g: 'batch_protein_g', carbs_g: 'batch_carbs_g', fat_g: 'batch_fat_g' }
+  function resolveRecipeMacros(input, existingServings) {
+    const { servings, ...rest } = input
+    const divisor = servings ?? existingServings
+    const out = { ...rest }
+    if (servings !== undefined) out.servings = servings
+    for (const [plain, batchKey] of Object.entries(BATCH_MACROS)) {
+      const batchVal = input[batchKey]
+      delete out[batchKey]
+      if (batchVal === undefined) continue
+      if (input[plain] !== undefined) throw new Error(`Pass either ${plain} or ${batchKey}, not both`)
+      if (!(divisor > 0)) throw new Error(`${batchKey} needs servings — pass servings (how many servings this batch makes) so it can be divided down`)
+      out[plain] = batchVal / divisor
+    }
+    return out
+  }
+  T('create_meal_recipe', 'Save a reusable meal template with its macros, stored PER SERVING. Pass servings plus batch_calories/batch_protein_g/batch_carbs_g/batch_fat_g instead of the plain macro fields to record a whole prep batch — it is divided down to per-serving before saving.',
+    { name: z.string(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(),
+      servings: z.number().positive().optional(), batch_calories: z.number().optional(), batch_protein_g: z.number().optional(), batch_carbs_g: z.number().optional(), batch_fat_g: z.number().optional() },
+    (a) => db.createMealRecipe(resolveRecipeMacros(a)))
+  T('update_meal_recipe', 'Update a meal template by id. Stored macros are always per serving; pass servings plus batch_calories/batch_protein_g/batch_carbs_g/batch_fat_g to give a batch total (needs servings — just passed, or already on the row) and it is divided down to per-serving.',
+    { id: z.number(), name: z.string().optional(), calories: z.number().optional(), protein_g: z.number().optional(), carbs_g: z.number().optional(), fat_g: z.number().optional(), notes: z.string().optional(),
+      servings: z.number().positive().optional(), batch_calories: z.number().optional(), batch_protein_g: z.number().optional(), batch_carbs_g: z.number().optional(), batch_fat_g: z.number().optional() },
+    ({ id, ...p }) => db.updateMealRecipe(id, resolveRecipeMacros(p, db.listMealRecipes().find((r) => r.id === id)?.servings)))
   T('delete_meal_recipe', 'Delete a meal template by id.', { id: z.number() }, ({ id }) => db.deleteMealRecipe(id))
+  // id first (numbers get stringified by the client, so compare as strings), then a case-insensitive
+  // name match — errors list close-name matches rather than a bare "not found".
+  function findRecipe(recipe) {
+    const recipes = db.listMealRecipes()
+    const byId = recipes.find((r) => String(r.id) === recipe)
+    if (byId) return byId
+    const lower = recipe.toLowerCase()
+    const byName = recipes.find((r) => r.name.toLowerCase() === lower)
+    if (byName) return byName
+    const near = recipes.filter((r) => r.name.toLowerCase().includes(lower)).map((r) => r.name)
+    throw new Error(near.length
+      ? `No recipe named "${recipe}" — did you mean: ${near.join(', ')}?`
+      : `No recipe named "${recipe}". Saved recipes: ${recipes.map((r) => r.name).join(', ') || 'none yet'}`)
+  }
+  T('log_meal_recipe', 'Logs a saved prep recipe as a meal, into the REAL Google Health / Fitbit app AND the local database. Macros are per serving and scaled by `servings`. Google does not deduplicate, so do not call this twice for the same box. Pass local_only:true to skip Google.',
+    { recipe: z.string().describe('Recipe name or id'), servings: z.number().positive().optional().describe('How many servings eaten now, default 1'), meal_type: z.string().optional(), eaten_at: z.string().optional(), notes: z.string().optional(), local_only: z.boolean().optional() },
+    async ({ recipe, servings, meal_type, eaten_at, notes, local_only }) => {
+      const r = findRecipe(recipe)
+      const n = servings ?? 1
+      const scale = (v) => (v == null ? null : v * n)
+      const row = await logMealRow({
+        name: n === 1 ? r.name : `${r.name} x${n}`, meal_type,
+        calories: scale(r.calories), protein_g: scale(r.protein_g), carbs_g: scale(r.carbs_g), fat_g: scale(r.fat_g),
+        notes: notes || r.notes, eaten_at: eaten_at || localNow(),
+      }, local_only)
+      return { ...row, recipe: r.name, recipe_id: r.id, servings: n }
+    })
 
   // ===== Hydration (local hydration log; Google Health water is read-only) =====
   T('log_hydration', 'Log water. Writes to the REAL Google Health / Fitbit app AND this server\'s local database. Pass local_only:true to skip Google. Google does not deduplicate, so do not call twice for the same drink; undo the Google side with delete_google_health_entry using the returned google_health_name.',
     { ml: z.number(), at: z.string().describe('ISO datetime; default now').optional(), notes: z.string().optional(), local_only: z.boolean().optional() },
     async ({ local_only, ...a }) => {
       const at = a.at || localNow()
-      const row = db.createHydration({ ...a, at })
-      if (local_only) return { ...row, google_health_name: null, note: 'local only — not in the Google Health app' }
+      if (local_only) return { ...db.createHydration({ ...a, at }), google_health_name: null, note: 'local only — not in the Google Health app' }
+      // Google write happens before the local insert so a successful name can go straight into
+      // the row (no updateHydration exists to patch it in after the fact).
       try {
         const { name } = await googleHealth.writeHydration({ startTime: at, milliliters: a.ml })
-        return { ...row, google_health_name: name }
+        return db.createHydration({ ...a, at, google_health_name: name })
       } catch (e) {
-        return { ...row, google_health_name: null, google_health_error: String(e.message || e).slice(0, 200) }
+        return { ...db.createHydration({ ...a, at }), google_health_name: null, google_health_error: String(e.message || e).slice(0, 200) }
       }
     })
   T('list_hydration', 'Your logged water intake in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listHydration({ from, to }))
-  T('delete_hydration', 'Delete a hydration log entry by id.', { id: z.number() }, ({ id }) => db.deleteHydration(id))
+  T('delete_hydration', 'Delete a hydration log entry by id. If it was also written to Google Health, deletes that entry too (unless local_only) and reports both sides.',
+    { id: z.number(), local_only: z.boolean().optional() },
+    async ({ id, local_only }) => {
+      const row = db.listHydration({}).find((h) => h.id === id)
+      if (!row?.google_health_name || local_only) return db.deleteHydration(id)
+      try {
+        const { deleted } = await googleHealth.deleteGoogleHealthEntry(row.google_health_name)
+        return { ...db.deleteHydration(id), google_health_deleted: deleted }
+      } catch (e) {
+        // Same reason as delete_meal: the row is the only place the Google entry's id is stored.
+        return { deleted: false, google_health_name: row.google_health_name, google_health_error: String(e.message || e).slice(0, 300),
+          note: 'Local row kept so the Google Health entry can still be found — retry, or pass local_only:true to drop just the local row.' }
+      }
+    })
 
   // ===== Body =====
   T('list_body_metrics', 'Body measurements (weight, body fat, waist, chest, arm) in a date range.', { from: z.string().optional(), to: z.string().optional() }, ({ from, to }) => db.listBodyMetrics({ from, to }))

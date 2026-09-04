@@ -3,7 +3,59 @@
 > **Read this first at the start of every session** for current state and where to resume.
 > Detailed 68-item UI checklist lives in `docs/UI-REVIEW-HANDOFF.md`.
 
-_Last updated: 2026-09-02._
+_Last updated: 2026-09-04._
+
+## 🔧 Meal update/delete fix — the cross-app ceiling (2026-09-04)
+**User's symptom:** updating a logged meal changed nothing on the Google Health side, and deleting a
+meal that had been logged from the Fitbit app failed with `"Invalid argument in request: names"`.
+
+**Two root causes, not one:**
+1. `fmtFood` in `server/mcp.mjs` dropped `item_key` from every food object returned by `get_food_log` /
+   `get_nutrition_intake` — so the model had no Google Health data-point id to address an entry with, and
+   ended up passing a food-catalog id to the delete tool instead.
+2. A real API ceiling: `batchDelete`/replace only work on data points the calling OAuth client itself
+   wrote (`dataSource.platform == GOOGLE_WEB_API`). The meal the user tried to delete was logged from the
+   Fitbit app (`platform: "FITBIT"`) — Google rejects the delete with HTTP 403, but reports it as the
+   misleading `"Invalid argument in request: names"`, which reads like a malformed-argument error, not a
+   permission one. See `docs/agent-food-logging-write-apis.md` §10 for the full live-tested writeup
+   (F3–F8).
+
+**What shipped:**
+- `meals.google_health_name` and `hydration.google_health_name` columns (nullable, via the existing
+  `ensureColumns()`), so a local row remembers which Google Health data point it wrote.
+- `update_google_health_entry` — a new MCP tool (`getGoogleHealthEntry`/`updateGoogleHealthEntry` in
+  `server/googlehealth.cjs`, `replaceNutritionLog` in `server/google-health-service.cjs`). Since
+  nutrition-log `PATCH` 500s server-side (F3), an "update" is create-new + delete-old under the hood.
+- `update_meal` / `delete_meal` now propagate to Google Health when the local row has a
+  `google_health_name`, instead of only touching the local `meals` table.
+- Honest delete reporting: a delete response now says whether Google actually removed anything
+  (`response.dataPoints` present, F5) rather than trusting a 200 status, and surfaces the permission error
+  in plain English when an entry belongs to another app (F4).
+
+**The hard ceiling that survives this fix:** entries logged from the Fitbit app, and any identified-food
+entry (one that references Google's food catalog rather than carrying inline nutrients), can never be
+edited or deleted through this API, by any client — not a bug in this server, a limit of the Google
+Health v4 API itself. Those entries are display-only from here on; the only path is editing them in the
+Fitbit/Google Health app directly.
+
+### 🍱 Meal-prep recipe logging (2026-09-04)
+Closes a gap noted above the fix: recipes could be created/updated/listed/deleted but never logged as an
+actual meal. New tool `log_meal_recipe` looks a recipe up by id or name, scales its macros by `servings`,
+and logs it through the same Google-mirroring path `log_meal` uses — so a prepped batch reaches the real
+Fitbit app, not just the local DB.
+
+`meal_recipes` gained a `servings` column recording how many servings a batch makes; the
+`calories`/`protein_g`/`carbs_g`/`fat_g` columns are unchanged and stay PER SERVING. `create_meal_recipe`/
+`update_meal_recipe` can now take `batch_calories`/`batch_protein_g`/`batch_carbs_g`/`batch_fat_g` plus
+`servings`, and the server divides the batch down to per-serving before storing — entering per-serving
+macros directly still works exactly as before.
+
+`duplicate_meals` ("repeat yesterday") now mirrors to Google Health by default too, same as `log_meal`;
+`local_only: true` opts out.
+
+**Worth remembering:** Google never deduplicates (see the write-path section below). Logging the same
+prep box twice — or calling `log_meal_recipe` twice for the same plate — creates two entries in the real
+Fitbit app, not one updated entry.
 
 ## ✍️ Google Health write path (2026-09-02)
 Two agents built this concurrently against a shared spec (`WRITE-SPEC.md`), grounded in a live
